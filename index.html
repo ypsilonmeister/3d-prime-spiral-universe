@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>PrimeCrystal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="ui-overlay">
+        <h1>PrimeCrystal</h1>
+        
+        <div class="section-label">Lattice (Structure)</div>
+        <select id="layout-select" onchange="setLayout(this.value)">
+            <option value="cube">Cubic</option>
+            <option value="hexagonal">Hex-Prism</option>
+            <option value="triangular">Tri-Prism</option>
+            <option value="octahedral">Trunc-Octa</option>
+            <option value="tetra">Tetra-Octa</option>
+            <option value="rhombic">Rhombic</option>
+            <option value="omnitruncated">Omni-Trunc</option>
+            <option value="aperiodic">Aperiodic</option>
+            <option value="hcp">HCP</option>
+            <option value="diamond_c">Diamond Cubic</option>
+            <option value="gyroid">Gyroid</option>
+        </select>
+
+        <div class="section-label">Fill Mode (Sequence)</div>
+        <select id="fillmode-select" onchange="setFillMode(this.value)">
+            <option value="shell">Sphere</option>
+            <option value="cubic">Cubic</option>
+            <option value="diamond">Diamond (L1)</option>
+            <option value="linear">Linear</option>
+            <option value="vortex">Vortex</option>
+            <option value="outside">Outside-In</option>
+            <option value="zorder">Z-Order</option>
+            <option value="modular">Modular ÷6</option>
+        </select>
+
+        <div class="section-label">Color Mode</div>
+        <select id="color-select" onchange="setColorMode(this.value)">
+            <option value="spectrum">Spectrum</option>
+            <option value="mod6">Mod 6 (6k±1)</option>
+            <option value="mod10">Mod 10 (last digit)</option>
+            <option value="twin">Twin Primes</option>
+            <option value="gap">Prime Gap</option>
+            <option value="depth">Depth</option>
+        </select>
+
+        <div class="section-label">Filters & Visuals</div>
+        <div class="toggle-row" onclick="toggleComposites()">
+            <span>Composites</span>
+            <div class="toggle-switch on" id="sw-composites"></div>
+        </div>
+        <div class="toggle-row" onclick="toggleLabels()">
+            <span>Labels</span>
+            <div class="toggle-switch on" id="sw-labels"></div>
+        </div>
+        <div class="toggle-row" onclick="toggleAutoGrow()">
+            <span>Auto-Grow</span>
+            <div class="toggle-switch" id="sw-autogrow"></div>
+        </div>
+        <div class="toggle-row">
+            <span>Stereo</span>
+            <select id="stereo-select" onchange="setStereoMode(this.value)" class="inline-select">
+                <option value="off">OFF</option>
+                <option value="parallel">Parallel</option>
+                <option value="cross">Cross</option>
+            </select>
+        </div>
+        <div class="controls" style="margin-top:8px;">
+            <button onclick="centerOne()">Center '1' (C)</button>
+            <button onclick="toggleUI()">Hide UI (H)</button>
+        </div>
+
+        <div class="section-label">Point Count: <span id="count-val">320,000</span></div>
+        <input type="range" id="count-slider" min="100" max="320000" value="320000" step="100" style="width: 100%; cursor: pointer; margin-bottom: 10px;">
+
+        <div class="section-label">Lattice Spacing: <span id="spacing-val">65</span></div>
+        <input type="range" id="spacing-slider" min="15" max="250" value="65" style="width: 100%; cursor: pointer;">
+
+        <div class="info">
+            Current Range: <span id="range-info" class="status">1 - 320,000</span><br>
+            Current State: <span id="current-state-text" class="status">Cubic - Sphere</span>
+        </div>
+    </div>
+    
+    <div id="show-ui-hint" style="opacity: 0;">Double Tap or Press 'H' to show menu</div>
+    
+    <div id="canvas-container"></div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>

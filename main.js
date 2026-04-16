@@ -13,7 +13,8 @@ let stereoMode = 'off';
 let uiVisible = true;
 let showLabels = true; 
 let autoGrow = false;
-let growSpeed = 50; 
+let growSpeed = 50;
+let linearStride = 0; // 0 = auto (2*range+1)
 const targetPositions = new Float32Array(MAX_POINTS * 3);
 const lerpSpeed = 0.05;
 
@@ -100,6 +101,13 @@ function init() {
         updateParticleVisuals();
     });
 
+    const strideSlider = document.getElementById('stride-slider');
+    strideSlider.addEventListener('input', (e) => {
+        linearStride = parseInt(e.target.value);
+        document.getElementById('stride-val').innerText = linearStride <= 0 ? 'Auto' : linearStride;
+        calculateTargetPositions();
+    });
+
     calculateTargetPositions();
     updateUI();
     animate();
@@ -118,6 +126,10 @@ function updateUI() {
     document.getElementById('sw-autogrow').classList.toggle('on', autoGrow);
     document.getElementById('color-select').value = colorMode;
     document.getElementById('stereo-select').value = stereoMode;
+    const strideSection = document.getElementById('stride-section');
+    if (strideSection) strideSection.style.display = (currentFillMode === 'linear') ? '' : 'none';
+    document.getElementById('stride-val').innerText = linearStride <= 0 ? 'Auto' : linearStride;
+    document.getElementById('stride-slider').value = linearStride;
 }
 
 function generatePrimes(n) {
@@ -180,7 +192,23 @@ function calculateTargetPositions() {
     if (currentFillMode === 'shell') candidates.sort((a, b) => (a.x*a.x+a.y*a.y+a.z*a.z) - (b.x*b.x+b.y*b.y+b.z*b.z));
     else if (currentFillMode === 'cubic') candidates.sort((a, b) => Math.max(Math.abs(a.x), Math.abs(a.y), Math.abs(a.z)) - Math.max(Math.abs(b.x), Math.abs(b.y), Math.abs(b.z)));
     else if (currentFillMode === 'diamond') candidates.sort((a, b) => (Math.abs(a.x)+Math.abs(a.y)+Math.abs(a.z)) - (Math.abs(b.x)+Math.abs(b.y)+Math.abs(b.z)));
-    else if (currentFillMode === 'linear') candidates.sort((a, b) => (a.z-b.z)||(a.y-b.y)||(a.x-b.x));
+    else if (currentFillMode === 'linear') {
+        if (linearStride <= 0) {
+            candidates.sort((a, b) => (a.z - b.z) || (a.y - b.y) || (a.x - b.x));
+        } else {
+            const W = linearStride;
+            // Quantize x-coordinate into segments of width W, then sort z → segment → y → x
+            const xMin = candidates.reduce((m, c) => Math.min(m, c.x), Infinity);
+            candidates.sort((a, b) => {
+                if (a.z !== b.z) return a.z - b.z;
+                const sA = Math.floor((a.x - xMin) / W);
+                const sB = Math.floor((b.x - xMin) / W);
+                if (sA !== sB) return sA - sB;
+                if (a.y !== b.y) return a.y - b.y;
+                return a.x - b.x;
+            });
+        }
+    }
     else if (currentFillMode === 'vortex') candidates.sort((a, b) => (Math.abs(a.z-b.z)>0.5 ? a.z-b.z : Math.atan2(a.y,a.x)-Math.atan2(b.y,b.x)));
     else if (currentFillMode === 'outside') candidates.sort((a, b) => (b.x*b.x+b.y*b.y+b.z*b.z) - (a.x*a.x+a.y*a.y+a.z*a.z));
     else if (currentFillMode === 'zorder') {

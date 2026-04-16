@@ -82,6 +82,11 @@
         <div class="section-label">Lattice Spacing: <span id="spacing-val">65</span></div>
         <input type="range" id="spacing-slider" min="15" max="250" value="65" style="width: 100%; cursor: pointer;">
 
+        <div id="stride-section" style="display:none;">
+            <div class="section-label">Linear Stride: <span id="stride-val">Auto</span></div>
+            <input type="range" id="stride-slider" min="0" max="200" value="0" step="1" style="width: 100%; cursor: pointer; margin-bottom: 10px;">
+        </div>
+
         <div class="info">
             Current Range: <span id="range-info" class="status">1 - 320,000</span><br>
             Current State: <span id="current-state-text" class="status">Cubic - Sphere</span>

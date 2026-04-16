@@ -2,6 +2,8 @@
 
 An interactive 3D WebGL visualization exploring the distribution of prime numbers within various space-filling lattices. This project is a unique collaborative creation between multiple AI models (**Gemini** and **Claude**), pushing the boundaries of mathematical visualization.
 
+[**🚀 Live Demo / ライブデモはこちら**](https://ypsilonmeister.github.io/3d-prime-spiral-universe/)
+
 32万個の整数を3次元空間に配置し、素数の織りなす幾何学的な構造を探索できるビジュアライザーです。本プロジェクトは、**Gemini** と **Claude** という二つのAI知能の共作によって誕生しました。
 
 ![3D Prime Spiral](https://via.placeholder.com/800x450?text=3D+Prime+Spiral+Universe)

@@ -20,18 +20,91 @@ body, html {
 
 #ui-overlay {
     position: absolute;
-    top: 16px;
-    left: 16px;
+    top: 8px;
+    left: 8px;
     z-index: 2;
     width: 210px;
+    max-height: calc(100dvh - 16px);
+    overflow-y: auto;
+    overflow-x: hidden;
     background: rgba(10, 10, 20, 0.6);
     backdrop-filter: blur(12px);
-    padding: 14px 15px;
+    padding: 10px 12px;
     border-radius: 10px;
     border: 1px solid rgba(0, 242, 255, 0.2);
     box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
     pointer-events: auto;
     transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 242, 255, 0.3) transparent;
+    -webkit-overflow-scrolling: touch;
+}
+
+#ui-overlay::-webkit-scrollbar {
+    width: 4px;
+}
+#ui-overlay::-webkit-scrollbar-track {
+    background: transparent;
+}
+#ui-overlay::-webkit-scrollbar-thumb {
+    background: rgba(0, 242, 255, 0.3);
+    border-radius: 2px;
+}
+
+/* 横向き時はさらにコンパクトに */
+@media (orientation: landscape) and (max-height: 500px) {
+    #ui-overlay {
+        top: 4px;
+        left: 4px;
+        max-height: calc(100dvh - 8px);
+        padding: 6px 10px;
+        width: 195px;
+    }
+
+    h1 {
+        margin-bottom: 6px;
+        font-size: 0.75rem;
+    }
+
+    .section-label {
+        margin: 4px 0 2px 0;
+    }
+
+    select {
+        margin-bottom: 5px;
+        padding: 4px 28px 4px 8px;
+        font-size: 0.7rem;
+    }
+
+    .toggle-row {
+        margin-bottom: 4px;
+        font-size: 0.7rem;
+    }
+
+    .toggle-switch {
+        width: 30px;
+        height: 17px;
+    }
+
+    .toggle-switch::after {
+        width: 11px;
+        height: 11px;
+    }
+
+    .toggle-switch.on::after {
+        left: 15px;
+    }
+
+    button {
+        padding: 3px 8px;
+        font-size: 0.65rem;
+    }
+
+    .info {
+        margin-top: 6px;
+        padding-top: 5px;
+        font-size: 0.62rem;
+    }
 }
 
 #ui-overlay.hidden {

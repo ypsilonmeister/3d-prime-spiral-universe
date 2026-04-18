@@ -473,33 +473,35 @@ function renderCardboard() {
 
     updateCameraFromOrientation();
 
-    // Eye separation: 3.5 cm scaled to scene units.
-    // Our spacing is ~65 units/node; IPD ≈ 63mm, so ~1 unit ≈ 1mm → eyeSep = 31
     const eyeSep = 31;
     const aspect = (w / 2) / h;
 
-    cameraL.copy(camera);
-    cameraR.copy(camera);
-    cameraL.fov = 90; cameraL.aspect = aspect; cameraL.updateProjectionMatrix();
-    cameraR.fov = 90; cameraR.aspect = aspect; cameraR.updateProjectionMatrix();
-
-    // Shift along the camera's local X axis (not world X)
+    // Build eye cameras from current camera state
     const rightVec = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+
+    cameraL.copy(camera);
+    cameraL.fov = 90; cameraL.aspect = aspect; cameraL.updateProjectionMatrix();
     cameraL.position.addScaledVector(rightVec, -eyeSep);
-    cameraR.position.addScaledVector(rightVec,  eyeSep);
+
+    cameraR.copy(camera);
+    cameraR.fov = 90; cameraR.aspect = aspect; cameraR.updateProjectionMatrix();
+    cameraR.position.addScaledVector(rightVec, eyeSep);
+
+    // Clear entire framebuffer first (autoClear=false, so we do it manually)
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, w, h);
+    renderer.clear();
 
     renderer.setScissorTest(true);
 
     // Left eye
     renderer.setViewport(0, 0, w / 2, h);
     renderer.setScissor(0, 0, w / 2, h);
-    renderer.clear();
     renderer.render(scene, cameraL);
 
     // Right eye
     renderer.setViewport(w / 2, 0, w / 2, h);
     renderer.setScissor(w / 2, 0, w / 2, h);
-    renderer.clear();
     renderer.render(scene, cameraR);
 
     renderer.setScissorTest(false);

@@ -24,6 +24,20 @@ const isPrimeArray = new Uint8Array(MAX_POINTS + 1);
 const primeGaps  = new Uint8Array(MAX_POINTS + 2); // gap to next prime (capped at 255)
 let lastTapTime = 0;
 
+// --- Cardboard VR ---
+let deviceOrientation = null;
+let screenOrientation = 0;
+let vrQuaternion = new THREE.Quaternion();
+const _zee = new THREE.Vector3(0, 0, 1);
+const _euler = new THREE.Euler();
+const _q0 = new THREE.Quaternion();
+const _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+let cardboardBarrelMesh = null;
+let cardboardScene = null;
+let cardboardCamera = null;
+let cardboardRenderTargetL = null;
+let cardboardRenderTargetR = null;
+
 function init() {
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x010103);
@@ -67,7 +81,23 @@ function init() {
     window.setFillMode = (m) => { currentFillMode = m; calculateTargetPositions(); updateUI(); };
     window.toggleComposites = () => { hideComposites = !hideComposites; updateParticleVisuals(); updateUI(); };
     window.setColorMode = (mode) => { colorMode = mode; updateParticleVisuals(); updateUI(); };
-    window.setStereoMode = (mode) => { stereoMode = mode; onWindowResize(); updateUI(); };
+    window.setStereoMode = (mode) => {
+        stereoMode = mode;
+        if (mode === 'cardboard') {
+            initCardboardVR();
+            document.getElementById('vr-hint').style.display = 'block';
+            // Request fullscreen for immersion
+            const el = document.documentElement;
+            if (el.requestFullscreen) el.requestFullscreen();
+            else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+        } else {
+            disposeCardboardVR();
+            document.getElementById('vr-hint').style.display = 'none';
+            if (document.exitFullscreen) document.exitFullscreen().catch(()=>{});
+        }
+        onWindowResize();
+        updateUI();
+    };
     window.toggleAutoGrow = () => { autoGrow = !autoGrow; if (autoGrow) growSpeed = 50; updateUI(); };
     window.toggleLabels = () => {
         showLabels = !showLabels;
@@ -392,10 +422,151 @@ function createGlowTexture() {
     return new THREE.CanvasTexture(canvas);
 }
 
+// ---- Cardboard VR helpers ----
+
+function initCardboardVR() {
+    // Request device orientation permission (iOS 13+)
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        DeviceOrientationEvent.requestPermission().then(state => {
+            if (state === 'granted') startOrientationListeners();
+        }).catch(console.error);
+    } else {
+        startOrientationListeners();
+    }
+
+    // Build barrel-distortion post-process for each eye
+    const w = window.innerWidth, h = window.innerHeight;
+    cardboardRenderTargetL = new THREE.WebGLRenderTarget(w / 2, h, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+    cardboardRenderTargetR = new THREE.WebGLRenderTarget(w / 2, h, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+
+    cardboardScene = new THREE.Scene();
+    cardboardCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    const barrelVert = `
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }
+    `;
+    const barrelFrag = `
+        precision highp float;
+        uniform sampler2D tDiffuse;
+        uniform vec2 center;
+        uniform float k1;
+        uniform float k2;
+        varying vec2 vUv;
+        void main() {
+            vec2 p = (vUv - center) * 2.0;
+            float r2 = dot(p, p);
+            float distort = 1.0 + k1 * r2 + k2 * r2 * r2;
+            vec2 distorted = center + p * distort * 0.5;
+            if (distorted.x < 0.0 || distorted.x > 1.0 || distorted.y < 0.0 || distorted.y > 1.0) {
+                gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+            } else {
+                gl_FragColor = texture2D(tDiffuse, distorted);
+            }
+        }
+    `;
+
+    const makeBarrelPlane = (texTarget, offsetX) => {
+        const mat = new THREE.ShaderMaterial({
+            uniforms: {
+                tDiffuse: { value: texTarget.texture },
+                center: { value: new THREE.Vector2(0.5, 0.5) },
+                k1: { value: 0.18 },
+                k2: { value: 0.02 },
+            },
+            vertexShader: barrelVert,
+            fragmentShader: barrelFrag,
+        });
+        const geo = new THREE.PlaneGeometry(1, 2);
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.x = offsetX;
+        return mesh;
+    };
+
+    cardboardScene.add(makeBarrelPlane(cardboardRenderTargetL, -0.5));
+    cardboardScene.add(makeBarrelPlane(cardboardRenderTargetR, 0.5));
+
+    controls.autoRotate = false;
+    controls.enabled = false;
+}
+
+function disposeCardboardVR() {
+    window.removeEventListener('deviceorientation', onDeviceOrientation);
+    window.removeEventListener('orientationchange', onScreenOrientationChange);
+    if (cardboardRenderTargetL) { cardboardRenderTargetL.dispose(); cardboardRenderTargetL = null; }
+    if (cardboardRenderTargetR) { cardboardRenderTargetR.dispose(); cardboardRenderTargetR = null; }
+    cardboardScene = null;
+    cardboardCamera = null;
+    controls.enabled = true;
+    controls.autoRotate = true;
+}
+
+function startOrientationListeners() {
+    window.addEventListener('deviceorientation', onDeviceOrientation, true);
+    window.addEventListener('orientationchange', onScreenOrientationChange);
+}
+
+function onDeviceOrientation(e) { deviceOrientation = e; }
+function onScreenOrientationChange() { screenOrientation = window.screen.orientation ? window.screen.orientation.angle : (window.orientation || 0); }
+
+function updateCameraFromOrientation() {
+    if (!deviceOrientation) return;
+    const alpha = THREE.MathUtils.degToRad(deviceOrientation.alpha || 0);
+    const beta  = THREE.MathUtils.degToRad(deviceOrientation.beta  || 0);
+    const gamma = THREE.MathUtils.degToRad(deviceOrientation.gamma || 0);
+    const orient = THREE.MathUtils.degToRad(screenOrientation || 0);
+
+    _euler.set(beta, alpha, -gamma, 'YXZ');
+    vrQuaternion.setFromEuler(_euler);
+    vrQuaternion.multiply(_q1);
+    _q0.setFromAxisAngle(_zee, -orient);
+    vrQuaternion.multiply(_q0);
+    camera.quaternion.copy(vrQuaternion);
+}
+
+function renderCardboard() {
+    const w = window.innerWidth, h = window.innerHeight;
+    const eyeSep = 32;
+
+    updateCameraFromOrientation();
+
+    // Resize render targets if needed
+    if (cardboardRenderTargetL.width !== w / 2 || cardboardRenderTargetL.height !== h) {
+        cardboardRenderTargetL.setSize(w / 2, h);
+        cardboardRenderTargetR.setSize(w / 2, h);
+    }
+
+    cameraL.copy(camera);
+    cameraR.copy(camera);
+    cameraL.aspect = (w / 2) / h; cameraL.fov = 90; cameraL.updateProjectionMatrix();
+    cameraR.aspect = (w / 2) / h; cameraR.fov = 90; cameraR.updateProjectionMatrix();
+    cameraL.translateX(-eyeSep);
+    cameraR.translateX(eyeSep);
+
+    renderer.setRenderTarget(cardboardRenderTargetL);
+    renderer.clear();
+    renderer.render(scene, cameraL);
+
+    renderer.setRenderTarget(cardboardRenderTargetR);
+    renderer.clear();
+    renderer.render(scene, cameraR);
+
+    renderer.setRenderTarget(null);
+    renderer.setViewport(0, 0, w, h);
+    renderer.clear();
+    renderer.render(cardboardScene, cardboardCamera);
+}
+
+// ---- End Cardboard VR helpers ----
+
 function onWindowResize() {
     const w = window.innerWidth, h = window.innerHeight;
     renderer.setSize(w, h);
-    camera.aspect = w/h; camera.updateProjectionMatrix();
+    if (stereoMode === 'cardboard') {
+        camera.aspect = w / h; camera.fov = 90; camera.updateProjectionMatrix();
+    } else {
+        camera.aspect = w / h; camera.fov = 60; camera.updateProjectionMatrix();
+    }
     if (stereoMode !== 'off') {
         cameraL.aspect = (w/2)/h; cameraR.aspect = (w/2)/h;
         cameraL.updateProjectionMatrix(); cameraR.updateProjectionMatrix();
@@ -415,7 +586,9 @@ function animate() {
     geometry.attributes.position.needsUpdate = true;
     controls.update();
 
-    if (stereoMode !== 'off') {
+    if (stereoMode === 'cardboard') {
+        renderCardboard();
+    } else if (stereoMode !== 'off') {
         const w = window.innerWidth, h = window.innerHeight, eyeSep = 45;
         renderer.clear();
         cameraL.copy(camera); cameraR.copy(camera);

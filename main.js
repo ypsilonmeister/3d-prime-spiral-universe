@@ -35,7 +35,7 @@ const _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
 
 function init() {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x010103);
+    // background handled by setClearColor so scissor-based stereo renders correctly
 
     camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 200000);
     camera.position.set(3000, 3000, 5000);
@@ -46,6 +46,7 @@ function init() {
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setClearColor(0x010103, 1);
     renderer.autoClear = false;
     document.getElementById('canvas-container').appendChild(renderer.domElement);
 
@@ -364,14 +365,21 @@ function createParticles() {
                     if (n >= 999.5) numDigits = 4.0; if (n >= 9999.5) numDigits = 5.0;
                     if (n >= 99999.5) numDigits = 6.0;
 
-                    float digitIndex = floor(gl_PointCoord.x * numDigits + 0.001);
-                    float localX = fract(gl_PointCoord.x * numDigits + 0.001);
+                    // Shrink text region: 80% wide, 65% tall, centred on point
+                    float mX = 0.10; float mY = 0.175;
+                    vec2 pc = (gl_PointCoord - vec2(mX, mY)) / vec2(1.0 - 2.0*mX, 1.0 - 2.0*mY);
+                    if (pc.x < 0.0 || pc.x > 1.0 || pc.y < 0.0 || pc.y > 1.0) {
+                        gl_FragColor = starColor;
+                    } else {
+                    float digitIndex = floor(pc.x * numDigits + 0.001);
+                    float localX = fract(pc.x * numDigits + 0.001);
                     float power = pow(10.0, numDigits - 1.0 - digitIndex);
                     float digit = mod(floor(n / power), 10.0);
-                    
-                    vec2 numUV = vec2((digit + localX) / 10.0, 1.0 - gl_PointCoord.y);
+
+                    vec2 numUV = vec2((digit + localX) / 10.0, 1.0 - pc.y);
                     vec4 numTex = texture2D(atlas, numUV);
                     gl_FragColor = mix(starColor, vec4(vColor * 2.5, numTex.a), numMix);
+                    }
                 } else {
                     gl_FragColor = starColor;
                 }
@@ -390,7 +398,7 @@ function createNumberAtlas() {
     canvas.width = 1024; canvas.height = 128;
     const ctx = canvas.getContext('2d');
     const slotW = 102.4;
-    ctx.font = 'bold 90px "Share Tech Mono", "Courier New", monospace';
+    ctx.font = 'bold 108px "Share Tech Mono", "Courier New", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (let i = 0; i < 10; i++) {
@@ -487,11 +495,7 @@ function renderCardboard() {
     cameraR.fov = 90; cameraR.aspect = aspect; cameraR.updateProjectionMatrix();
     cameraR.position.addScaledVector(rightVec, eyeSep);
 
-    // Clear entire framebuffer first (autoClear=false, so we do it manually)
-    renderer.setScissorTest(false);
-    renderer.setViewport(0, 0, w, h);
-    renderer.clear();
-
+    // Frame already cleared by animate() before this call
     renderer.setScissorTest(true);
 
     // Left eye
@@ -536,24 +540,26 @@ function animate() {
     geometry.attributes.position.needsUpdate = true;
     controls.update();
 
+    const W = window.innerWidth, H = window.innerHeight;
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, W, H);
+    renderer.clear();
+
     if (stereoMode === 'cardboard') {
         renderCardboard();
     } else if (stereoMode !== 'off') {
-        const w = window.innerWidth, h = window.innerHeight, eyeSep = 45;
-        renderer.clear();
+        const eyeSep = 45;
         cameraL.copy(camera); cameraR.copy(camera);
-        cameraL.aspect = (w/2)/h; cameraL.updateProjectionMatrix();
-        cameraR.aspect = (w/2)/h; cameraR.updateProjectionMatrix();
+        cameraL.aspect = (W/2)/H; cameraL.updateProjectionMatrix();
+        cameraR.aspect = (W/2)/H; cameraR.updateProjectionMatrix();
         cameraL.translateX(-eyeSep); cameraR.translateX(eyeSep);
         renderer.setScissorTest(true);
-        renderer.setViewport(0, 0, w/2, h); renderer.setScissor(0, 0, w/2, h);
+        renderer.setViewport(0, 0, W/2, H); renderer.setScissor(0, 0, W/2, H);
         renderer.render(scene, stereoMode === 'parallel' ? cameraL : cameraR);
-        renderer.setViewport(w/2, 0, w/2, h); renderer.setScissor(w/2, 0, w/2, h);
+        renderer.setViewport(W/2, 0, W/2, H); renderer.setScissor(W/2, 0, W/2, H);
         renderer.render(scene, stereoMode === 'parallel' ? cameraR : cameraL);
         renderer.setScissorTest(false);
     } else {
-        renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
-        renderer.clear();
         renderer.render(scene, camera);
     }
 }

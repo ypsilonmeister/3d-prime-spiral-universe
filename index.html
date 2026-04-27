@@ -42,6 +42,7 @@
 
         <div class="section-label">Color Mode</div>
         <select id="color-select" onchange="setColorMode(this.value)">
+            <option value="types">Number Types</option>
             <option value="spectrum">Spectrum</option>
             <option value="mod6">Mod 6 (6k±1)</option>
             <option value="mod10">Mod 10 (last digit)</option>
@@ -49,6 +50,11 @@
             <option value="gap">Prime Gap</option>
             <option value="depth">Depth</option>
         </select>
+
+        <div id="type-panel">
+            <div class="section-label">Number Types</div>
+            <div id="type-list"></div>
+        </div>
 
         <div class="section-label">Filters & Visuals</div>
         <div class="toggle-row" onclick="toggleComposites()">
@@ -69,8 +75,10 @@
                 <option value="off">OFF</option>
                 <option value="parallel">Parallel</option>
                 <option value="cross">Cross</option>
-                <option value="cardboard">Cardboard VR</option>
             </select>
+        </div>
+        <div class="controls" style="margin-top:4px;">
+            <button id="vr-btn" onclick="enterVR()" style="display:none;">Enter VR</button>
         </div>
         <div class="controls" style="margin-top:8px;">
             <button onclick="centerOne()">Center '1' (C)</button>
@@ -95,17 +103,14 @@
     </div>
     
     <div id="show-ui-hint" style="opacity: 0;">Double Tap or Press 'H' to show menu</div>
-    <div id="vr-hint" style="display:none; position:fixed; bottom:20px; left:50%; transform:translateX(-50%); background:rgba(0,0,0,0.7); color:#0df; font-family:'Orbitron',sans-serif; font-size:11px; padding:8px 16px; border-radius:20px; border:1px solid #0df; pointer-events:none; z-index:100; text-align:center; white-space:nowrap;">
-        縦のままCardboardにセット → 横向きに
-    </div>
     
     <div id="canvas-container"></div>
 
     <script type="importmap">
         {
             "imports": {
-                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+                "three": "https://unpkg.com/three@0.167.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.167.0/examples/jsm/"
             }
         }
     </script>

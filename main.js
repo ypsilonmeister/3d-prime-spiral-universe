@@ -331,8 +331,6 @@ function updateParticleVisuals() {
             color.set(tdef.color);
             sizes[i] = tdef.size;
         } else {
-            // Legacy color modes — types panel hidden, but typeVisibility still gates visibility
-            if (!visible) { sizes[i] = 0.0; continue; }
             const isComposite = !isPrimeArray[n] && n > 1;
             if (isComposite && hideComposites) { sizes[i] = 0.0; continue; }
 

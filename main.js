@@ -30,6 +30,10 @@ let lastTapTime = 0;
 let vrSession = null;
 let vrSupported = false;
 
+// --- Lerp state ---
+let lerpActive = true;
+let growUICounter = 0;
+
 // ---------------------------------------------------------------------------
 // Number type definitions
 // order matters: first match wins (prime subtypes checked before generic prime)
@@ -111,15 +115,29 @@ const NUMBER_TYPES = [
 const typeVisibility = {};
 for (const t of NUMBER_TYPES) typeVisibility[t.key] = t.defaultOn;
 
+// pre-built lookup: key -> type def (built once, never rebuilt)
+const typeMap = {};
+for (const t of NUMBER_TYPES) typeMap[t.key] = t;
+
+// pre-resolved per-particle type def and color cache
+const particleTypeDef = new Array(MAX_POINTS + 1); // set in classifyNumbers
+const cachedR = new Float32Array(MAX_POINTS);
+const cachedG = new Float32Array(MAX_POINTS);
+const cachedB = new Float32Array(MAX_POINTS);
+const cachedSize = new Float32Array(MAX_POINTS);
+
 // ---------------------------------------------------------------------------
 // Classify every number once after sieve
 // ---------------------------------------------------------------------------
 function classifyNumbers() {
     for (let n = 1; n <= MAX_POINTS; n++) {
+        let matched = null;
         for (const t of NUMBER_TYPES) {
-            if (t.test(n, isPrimeArray)) { numberType[n] = t.key; break; }
+            if (t.test(n, isPrimeArray)) { matched = t; break; }
         }
-        if (!numberType[n]) numberType[n] = 'odd'; // fallback
+        if (!matched) matched = typeMap['odd'];
+        numberType[n] = matched.key;
+        particleTypeDef[n] = matched;
     }
 }
 
@@ -313,7 +331,7 @@ function isCompositeVisible(n) {
 function updateParticleVisuals() {
     const cols = geometry.attributes.customColor.array;
     const sizes = geometry.attributes.size.array;
-    const color = new THREE.Color();
+    const color = new THREE.Color(); // reused, no allocation per iteration
 
     let maxDepth = 1;
     if (colorMode === 'depth') {
@@ -323,35 +341,40 @@ function updateParticleVisuals() {
         }
     }
 
-    // pre-build a lookup from key -> type def
-    const typeMap = {};
-    for (const t of NUMBER_TYPES) typeMap[t.key] = t;
+    // Pre-parse type colors into RGB floats once per call
+    const typeRGB = {};
+    for (const t of NUMBER_TYPES) {
+        color.set(t.color);
+        typeRGB[t.key] = [color.r, color.g, color.b];
+    }
+
+    const isTypes = colorMode === 'types';
 
     for (let n = 1; n <= MAX_POINTS; n++) {
         const i = n - 1;
         if (n > activePointCount) { sizes[i] = 0.0; continue; }
 
-        const tkey = numberType[n];
-        const tdef = typeMap[tkey];
-        const visible = typeVisibility[tkey];
-
         if (!isCompositeVisible(n)) { sizes[i] = 0.0; continue; }
 
-        if (colorMode === 'types') {
-            if (!visible) { sizes[i] = 0.0; continue; }
-            color.set(tdef.color);
+        const tkey = numberType[n];
+
+        if (isTypes) {
+            if (!typeVisibility[tkey]) { sizes[i] = 0.0; continue; }
+            const rgb = typeRGB[tkey];
+            const tdef = particleTypeDef[n];
+            cols[i*3] = rgb[0]; cols[i*3+1] = rgb[1]; cols[i*3+2] = rgb[2];
             sizes[i] = tdef.size;
         } else {
             if (n === 1) {
                 color.set(0xffd700); sizes[i] = 120.0;
             } else if (isPrimeArray[n]) {
                 sizes[i] = 80.0;
-                if (colorMode === 'spectrum') { color.setHSL(0.55 + (n/MAX_POINTS)*0.3, 1.0, 0.6); }
+                if      (colorMode === 'spectrum') { color.setHSL(0.55 + (n/MAX_POINTS)*0.3, 1.0, 0.6); }
                 else if (colorMode === 'mod6') {
                     if      (n === 2) color.setHSL(0.08, 1.0, 0.65);
                     else if (n === 3) color.setHSL(0.33, 1.0, 0.65);
                     else if (n % 6 === 1) color.setHSL(0.57, 1.0, 0.60);
-                    else               color.setHSL(0.85, 1.0, 0.60);
+                    else                  color.setHSL(0.85, 1.0, 0.60);
                 }
                 else if (colorMode === 'mod10') { color.setHSL((n % 10) / 10.0, 0.9, 0.6); }
                 else if (colorMode === 'twin') {
@@ -370,9 +393,8 @@ function updateParticleVisuals() {
                 color.set(0x3a3a5c);
                 sizes[i] = 28.0;
             }
+            cols[i*3] = color.r; cols[i*3+1] = color.g; cols[i*3+2] = color.b;
         }
-
-        cols[i*3] = color.r; cols[i*3+1] = color.g; cols[i*3+2] = color.b;
     }
     geometry.attributes.customColor.needsUpdate = true;
     geometry.attributes.size.needsUpdate = true;
@@ -470,6 +492,7 @@ function calculateTargetPositions() {
         targetPositions[i*3+1]=c.y*currentSpacing;
         targetPositions[i*3+2]=c.z*currentSpacing;
     }
+    lerpActive = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -646,33 +669,47 @@ async function enterVR() {
 // ---------------------------------------------------------------------------
 // Resize / animate
 // ---------------------------------------------------------------------------
+let _vpW = window.innerWidth, _vpH = window.innerHeight;
+
 function onWindowResize() {
-    const w = window.innerWidth, h = window.innerHeight;
-    renderer.setSize(w, h);
-    camera.aspect = w / h; camera.fov = 60; camera.updateProjectionMatrix();
-    if (points) points.material.uniforms.uViewHeight.value = h;
+    _vpW = window.innerWidth; _vpH = window.innerHeight;
+    renderer.setSize(_vpW, _vpH);
+    camera.aspect = _vpW / _vpH; camera.fov = 60; camera.updateProjectionMatrix();
+    if (points) points.material.uniforms.uViewHeight.value = _vpH;
     if (stereoMode !== 'off') {
-        cameraL.aspect = (w/2)/h; cameraR.aspect = (w/2)/h;
+        cameraL.aspect = (_vpW/2)/_vpH; cameraR.aspect = (_vpW/2)/_vpH;
         cameraL.updateProjectionMatrix(); cameraR.updateProjectionMatrix();
     }
 }
+
+// lerp convergence: stop updating GPU buffer when all points are close enough
+const LERP_THRESHOLD_SQ = 0.25; // 0.5 units per axis
 
 function animate() {
     if (autoGrow && activePointCount < MAX_POINTS) {
         growSpeed *= 1.005;
         activePointCount = Math.min(MAX_POINTS, activePointCount + Math.floor(growSpeed));
-        updateUI();
-        updateParticleVisuals();
+        // throttle DOM updates to every 10 frames during auto-grow
+        if (++growUICounter % 10 === 0) { updateUI(); updateParticleVisuals(); }
+        lerpActive = true;
     }
-    const p = geometry.attributes.position.array;
-    for (let i = 0; i < MAX_POINTS * 3; i++) p[i] += (targetPositions[i] - p[i]) * lerpSpeed;
-    geometry.attributes.position.needsUpdate = true;
+
+    if (lerpActive) {
+        const p = geometry.attributes.position.array;
+        let maxDeltaSq = 0;
+        for (let i = 0; i < MAX_POINTS * 3; i++) {
+            const delta = (targetPositions[i] - p[i]) * lerpSpeed;
+            p[i] += delta;
+            if (delta * delta > maxDeltaSq) maxDeltaSq = delta * delta;
+        }
+        geometry.attributes.position.needsUpdate = true;
+        if (maxDeltaSq < LERP_THRESHOLD_SQ) lerpActive = false;
+    }
 
     if (!vrSession) controls.update();
 
-    const W = window.innerWidth, H = window.innerHeight;
     renderer.setScissorTest(false);
-    renderer.setViewport(0,0,W,H);
+    renderer.setViewport(0, 0, _vpW, _vpH);
     renderer.clear();
 
     if (vrSession) {
@@ -680,13 +717,13 @@ function animate() {
     } else if (stereoMode !== 'off') {
         const eyeSep = 45;
         cameraL.copy(camera); cameraR.copy(camera);
-        cameraL.aspect=(W/2)/H; cameraL.updateProjectionMatrix();
-        cameraR.aspect=(W/2)/H; cameraR.updateProjectionMatrix();
+        cameraL.aspect=(_vpW/2)/_vpH; cameraL.updateProjectionMatrix();
+        cameraR.aspect=(_vpW/2)/_vpH; cameraR.updateProjectionMatrix();
         cameraL.translateX(-eyeSep); cameraR.translateX(eyeSep);
         renderer.setScissorTest(true);
-        renderer.setViewport(0,0,W/2,H); renderer.setScissor(0,0,W/2,H);
+        renderer.setViewport(0,0,_vpW/2,_vpH); renderer.setScissor(0,0,_vpW/2,_vpH);
         renderer.render(scene, stereoMode==='parallel' ? cameraL : cameraR);
-        renderer.setViewport(W/2,0,W/2,H); renderer.setScissor(W/2,0,W/2,H);
+        renderer.setViewport(_vpW/2,0,_vpW/2,_vpH); renderer.setScissor(_vpW/2,0,_vpW/2,_vpH);
         renderer.render(scene, stereoMode==='parallel' ? cameraR : cameraL);
         renderer.setScissorTest(false);
     } else {

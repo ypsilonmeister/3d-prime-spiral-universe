@@ -7,8 +7,8 @@ let activePointCount = 320000;
 let currentLayout = 'cube';
 let currentFillMode = 'shell';
 let currentSpacing = 65;
-let hideComposites = false;
-let colorMode = 'types';
+let compositeMode = 'both';
+let colorMode = 'spectrum';
 let stereoMode = 'off';
 let uiVisible = true;
 let showLabels = true;
@@ -174,7 +174,7 @@ function init() {
 
     window.setLayout   = (l) => { currentLayout = l; calculateTargetPositions(); updateUI(); };
     window.setFillMode = (m) => { currentFillMode = m; calculateTargetPositions(); updateUI(); };
-    window.toggleComposites = () => { hideComposites = !hideComposites; updateParticleVisuals(); updateUI(); };
+    window.setCompositeMode = (m) => { compositeMode = m; updateParticleVisuals(); updateUI(); };
     window.setColorMode = (mode) => { colorMode = mode; updateParticleVisuals(); updateUI(); };
     window.setStereoMode = (mode) => { stereoMode = mode; onWindowResize(); updateUI(); };
     window.toggleAutoGrow = () => { autoGrow = !autoGrow; if (autoGrow) growSpeed = 50; updateUI(); };
@@ -279,7 +279,10 @@ function updateUI() {
     document.getElementById('range-info').innerText = `1 - ${activePointCount.toLocaleString()}`;
     const st = document.getElementById('current-state-text');
     if (st) st.innerText = `${currentLayout.toUpperCase()} - ${currentFillMode.toUpperCase()}`;
-    document.getElementById('sw-composites').classList.toggle('on', !hideComposites);
+    
+    const compSelect = document.getElementById('composite-select');
+    if (compSelect) compSelect.value = compositeMode;
+
     document.getElementById('sw-labels').classList.toggle('on', showLabels);
     document.getElementById('sw-autogrow').classList.toggle('on', autoGrow);
     document.getElementById('color-select').value = colorMode;
@@ -298,6 +301,15 @@ function updateUI() {
 // ---------------------------------------------------------------------------
 // Particle visuals
 // ---------------------------------------------------------------------------
+function isCompositeVisible(n) {
+    const isComp = !isPrimeArray[n] && n > 1;
+    if (!isComp) return true; 
+    if (compositeMode === 'none') return false;
+    if (compositeMode === 'odd') return n % 2 !== 0;
+    if (compositeMode === 'even') return n % 2 === 0;
+    return true; 
+}
+
 function updateParticleVisuals() {
     const cols = geometry.attributes.customColor.array;
     const sizes = geometry.attributes.size.array;
@@ -323,17 +335,13 @@ function updateParticleVisuals() {
         const tdef = typeMap[tkey];
         const visible = typeVisibility[tkey];
 
+        if (!isCompositeVisible(n)) { sizes[i] = 0.0; continue; }
+
         if (colorMode === 'types') {
             if (!visible) { sizes[i] = 0.0; continue; }
-            // composites: respect hideComposites toggle
-            const isComposite = !isPrimeArray[n] && n > 1;
-            if (isComposite && hideComposites) { sizes[i] = 0.0; continue; }
             color.set(tdef.color);
             sizes[i] = tdef.size;
         } else {
-            const isComposite = !isPrimeArray[n] && n > 1;
-            if (isComposite && hideComposites) { sizes[i] = 0.0; continue; }
-
             if (n === 1) {
                 color.set(0xffd700); sizes[i] = 120.0;
             } else if (isPrimeArray[n]) {
@@ -549,14 +557,41 @@ function createNumberAtlas() {
     canvas.width = 1024; canvas.height = 128;
     const ctx = canvas.getContext('2d');
     const slotW = 102.4;
-    ctx.font = 'bold 108px "Share Tech Mono","Courier New",monospace';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
     for (let i = 0; i < 10; i++) {
         const cx = i * slotW + slotW * 0.5;
-        ctx.shadowColor = 'rgba(0,220,255,0.9)'; ctx.shadowBlur = 14;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(i.toString(), cx, 64);
+        const cy = 64;
+
+        // --- Nixie tube glow layers (back to front) ---
+
+        // outermost diffuse halo
+        ctx.font = 'bold 108px "Nixie One", serif';
+        ctx.shadowColor = 'rgba(255, 120, 20, 0.25)';
+        ctx.shadowBlur = 40;
+        ctx.fillStyle = 'rgba(255, 100, 10, 0.18)';
+        ctx.fillText(i.toString(), cx, cy);
+
+        // mid glow
+        ctx.shadowColor = 'rgba(255, 160, 40, 0.6)';
+        ctx.shadowBlur = 18;
+        ctx.fillStyle = 'rgba(255, 140, 30, 0.55)';
+        ctx.fillText(i.toString(), cx, cy);
+
+        // tight inner glow
+        ctx.shadowColor = 'rgba(255, 200, 80, 0.9)';
+        ctx.shadowBlur = 6;
+        ctx.fillStyle = '#ff9922';
+        ctx.fillText(i.toString(), cx, cy);
+
+        // bright hot core
+        ctx.shadowColor = 'rgba(255, 240, 160, 1.0)';
+        ctx.shadowBlur = 2;
+        ctx.fillStyle = '#ffe0a0';
+        ctx.fillText(i.toString(), cx, cy);
     }
+
     const tex = new THREE.CanvasTexture(canvas);
     tex.magFilter = THREE.LinearFilter;
     tex.minFilter = THREE.LinearMipmapLinearFilter;

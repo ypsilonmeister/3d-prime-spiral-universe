@@ -6,7 +6,7 @@
     <title>PrimeCrystal</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Nixie+One&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -43,7 +43,7 @@
         <div class="section-label">Color Mode</div>
         <select id="color-select" onchange="setColorMode(this.value)">
             <option value="types">Number Types</option>
-            <option value="spectrum">Spectrum</option>
+            <option value="spectrum" selected>Spectrum</option>
             <option value="mod6">Mod 6 (6k±1)</option>
             <option value="mod10">Mod 10 (last digit)</option>
             <option value="twin">Twin Primes</option>
@@ -57,9 +57,14 @@
         </div>
 
         <div class="section-label">Filters & Visuals</div>
-        <div class="toggle-row" onclick="toggleComposites()">
+        <div class="toggle-row">
             <span>Composites</span>
-            <div class="toggle-switch on" id="sw-composites"></div>
+            <select id="composite-select" onchange="setCompositeMode(this.value)" class="inline-select">
+                <option value="both">Both</option>
+                <option value="odd">Odd</option>
+                <option value="even">Even</option>
+                <option value="none">None</option>
+            </select>
         </div>
         <div class="toggle-row" onclick="toggleLabels()">
             <span>Labels</span>

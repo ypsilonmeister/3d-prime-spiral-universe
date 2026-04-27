@@ -493,31 +493,37 @@ function createParticles() {
 
     const material = new THREE.ShaderMaterial({
         uniforms: {
-            atlas:      { value: createNumberAtlas() },
-            starTex:    { value: createGlowTexture() },
-            uShowLabels:{ value: 1.0 }
+            atlas:       { value: createNumberAtlas() },
+            starTex:     { value: createGlowTexture() },
+            uShowLabels: { value: 1.0 },
+            uViewHeight: { value: window.innerHeight }
         },
         vertexShader: `
             attribute float size; attribute float number; attribute vec3 customColor;
+            uniform float uViewHeight;
             varying vec3 vColor; varying float vNumber; varying float vDistance; varying float vSize;
             void main() {
                 vColor = customColor; vNumber = number; vSize = size;
                 vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
                 vDistance = -mvPosition.z;
-                gl_PointSize = max(size * (1500.0 / vDistance), 0.0);
+                // scale point size proportionally to viewport height so density stays
+                // consistent regardless of window/screen size
+                gl_PointSize = max(size * (uViewHeight * 1.5 / vDistance), 0.0);
                 gl_Position = projectionMatrix * mvPosition;
             }
         `,
         fragmentShader: `
             precision highp float;
-            uniform sampler2D atlas; uniform sampler2D starTex; uniform float uShowLabels;
+            uniform sampler2D atlas; uniform sampler2D starTex; uniform float uShowLabels; uniform float uViewHeight;
             varying vec3 vColor; varying float vNumber; varying float vDistance; varying float vSize;
             void main() {
                 float n = floor(vNumber + 0.5);
                 if (n < 0.5 || vSize < 0.1) discard;
-                float currentPointSize = max(vSize * (1500.0 / vDistance), 0.0);
+                float currentPointSize = max(vSize * (uViewHeight * 1.5 / vDistance), 0.0);
                 float isPrime = step(50.0, vSize);
-                float numMix = uShowLabels * isPrime * smoothstep(2500.0, 800.0, vDistance);
+                float labelFar  = uViewHeight * 3.5;
+                float labelNear = uViewHeight * 1.1;
+                float numMix = uShowLabels * isPrime * smoothstep(labelFar, labelNear, vDistance);
                 vec4 starColor = vec4(vColor * 1.5, 1.0) * texture2D(starTex, gl_PointCoord);
                 if (numMix > 0.01 && currentPointSize > 6.0) {
                     float numDigits = 1.0;
@@ -567,7 +573,7 @@ function createNumberAtlas() {
         // --- Nixie tube glow layers (back to front) ---
 
         // outermost diffuse halo
-        ctx.font = 'bold 108px "Nixie One", serif';
+        ctx.font = '108px "Nixie One", serif';
         ctx.shadowColor = 'rgba(255, 120, 20, 0.25)';
         ctx.shadowBlur = 40;
         ctx.fillStyle = 'rgba(255, 100, 10, 0.18)';
@@ -644,6 +650,7 @@ function onWindowResize() {
     const w = window.innerWidth, h = window.innerHeight;
     renderer.setSize(w, h);
     camera.aspect = w / h; camera.fov = 60; camera.updateProjectionMatrix();
+    if (points) points.material.uniforms.uViewHeight.value = h;
     if (stereoMode !== 'off') {
         cameraL.aspect = (w/2)/h; cameraR.aspect = (w/2)/h;
         cameraL.updateProjectionMatrix(); cameraR.updateProjectionMatrix();
@@ -687,4 +694,12 @@ function animate() {
     }
 }
 
-document.fonts.ready.then(() => init());
+const _nixieFont = new FontFace(
+    'Nixie One',
+    "url(https://fonts.gstatic.com/s/nixieone/v17/lW-8wjkKLXjg5y2o2uUoUA.woff2) format('woff2')," +
+    "url(https://fonts.gstatic.com/s/nixieone/v17/lW-8wjkKLXjg5y2o2uUoUA.ttf) format('truetype')"
+);
+_nixieFont.load().then(f => {
+    document.fonts.add(f);
+    init();
+}).catch(() => init());

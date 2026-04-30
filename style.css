@@ -272,6 +272,20 @@ button.active {
     font-weight: bold;
 }
 
+/* Disabled UI sections */
+.ui-section-disabled {
+    opacity: 0.28;
+    pointer-events: none;
+    user-select: none;
+}
+
+.ui-section-disabled select,
+.ui-section-disabled input[type="range"],
+.ui-section-disabled button,
+.ui-section-disabled .toggle-row {
+    cursor: not-allowed;
+}
+
 /* Number Types panel */
 #type-panel {
     margin-top: 4px;

@@ -18,6 +18,562 @@ let linearStride = 0;
 const targetPositions = new Float32Array(MAX_POINTS * 3);
 const lerpSpeed = 0.05;
 
+// --- p-adic Mode ---
+let padicModeActive = false;
+let padicP = 2;                    // current prime base
+let padicAnimating = false;
+let padicAnimFrame = null;
+let padicColorMode = false;        // highlight p-adic layers
+// Pre-computed p-adic valuation v_p(n) per particle; recomputed when p changes
+const padicVal = new Int16Array(MAX_POINTS + 1);  // v_p(n): 0..~20
+// First 25 primes for the dropdown
+const PADIC_PRIMES = [2,3,5,7,11,13,17,19,23,29,31,37,41,43,47,53,59,61,67,71,73,79,83,89,97];
+
+// --- Number Theoretic Landscape Mode ---
+let ntlModeActive = false;
+let ntlFunc = 'd';         // 'd' | 'sigma_ratio' | 'omega' | 'log_sigma' | 'mobius' | 'phi'
+let ntlScale = 1.0;        // height multiplier
+let ntlHighlightPerfect = false;
+let ntlHighlightHC = false;
+// Pre-computed tables (filled once in computeNTLTables)
+const ntl_d     = new Uint16Array(MAX_POINTS + 1);   // divisor count
+const ntl_sigma = new Float32Array(MAX_POINTS + 1);  // sigma / n  (ratio)
+const ntl_omega = new Uint8Array(MAX_POINTS + 1);    // distinct prime factors
+const ntl_mu    = new Int8Array(MAX_POINTS + 1);     // Mobius: -1/0/1
+const ntl_phi   = new Uint32Array(MAX_POINTS + 1);   // Euler totient
+const ntlOffsets = new Float32Array(MAX_POINTS);     // Z-axis offset per particle
+// Highly composite numbers up to 320000
+const HC_NUMBERS = new Set([1,2,4,6,12,24,36,48,60,120,180,240,360,720,840,1260,1680,2520,5040,7560,10080,15120,20160,25200,27720,45360,50400,55440,83160,110880,166320,221760,277200,332640]);
+const PERFECT_NUMBERS = new Set([6, 28, 496, 8128]);
+
+function computeNTLTables() {
+    // Sieve for divisor count and sigma (sum)
+    const sigmaSum = new Float64Array(MAX_POINTS + 1);
+    const divCount = new Uint16Array(MAX_POINTS + 1);
+    for (let d = 1; d <= MAX_POINTS; d++) {
+        for (let m = d; m <= MAX_POINTS; m += d) {
+            divCount[m]++;
+            sigmaSum[m] += d;
+        }
+    }
+    for (let n = 1; n <= MAX_POINTS; n++) {
+        ntl_d[n] = divCount[n];
+        ntl_sigma[n] = sigmaSum[n] / n;  // sigma/n ratio
+    }
+
+    // Sieve for omega (distinct prime factors) and mu (Mobius)
+    // Start with mu[n]=1 for all, then sieve
+    for (let n = 1; n <= MAX_POINTS; n++) ntl_mu[n] = 1;
+    const smallestPrime = new Int32Array(MAX_POINTS + 1);
+    for (let i = 2; i <= MAX_POINTS; i++) {
+        if (smallestPrime[i] === 0) { // i is prime
+            for (let j = i; j <= MAX_POINTS; j += i) {
+                if (smallestPrime[j] === 0) smallestPrime[j] = i;
+            }
+        }
+    }
+    for (let n = 2; n <= MAX_POINTS; n++) {
+        let m = n, squareFree = true, cnt = 0;
+        while (m > 1) {
+            const p = smallestPrime[m];
+            let exp = 0;
+            while (m % p === 0) { m = (m / p) | 0; exp++; }
+            cnt++;
+            if (exp > 1) squareFree = false;
+        }
+        ntl_omega[n] = cnt;
+        ntl_mu[n] = squareFree ? (cnt % 2 === 0 ? 1 : -1) : 0;
+    }
+
+    // Euler totient via sieve
+    for (let n = 0; n <= MAX_POINTS; n++) ntl_phi[n] = n;
+    for (let p = 2; p <= MAX_POINTS; p++) {
+        if (ntl_phi[p] === p) { // p is prime
+            for (let m = p; m <= MAX_POINTS; m += p) {
+                ntl_phi[m] -= (ntl_phi[m] / p) | 0;
+            }
+        }
+    }
+    ntl_phi[1] = 1;
+}
+
+function computeNTLOffsets() {
+    if (!ntlModeActive) { ntlOffsets.fill(0); return; }
+
+    let rawMax = 0;
+    for (let n = 1; n <= MAX_POINTS; n++) {
+        let v;
+        if      (ntlFunc === 'd')           v = ntl_d[n];
+        else if (ntlFunc === 'sigma_ratio') v = ntl_sigma[n];
+        else if (ntlFunc === 'omega')       v = ntl_omega[n];
+        else if (ntlFunc === 'log_sigma')   v = ntl_sigma[n] > 0 ? Math.log(ntl_sigma[n]) : 0;
+        else if (ntlFunc === 'mobius')      v = ntl_mu[n];
+        else                                v = ntl_phi[n] / n;  // phi ratio
+        ntlOffsets[n - 1] = v;
+        const a = Math.abs(v);
+        if (a > rawMax) rawMax = a;
+    }
+
+    // Normalize to [0, spacing*scale] range so it's visually readable at any zoom
+    const targetMax = currentSpacing * 25 * ntlScale;
+    const norm = rawMax > 0 ? targetMax / rawMax : 1;
+    for (let i = 0; i < MAX_POINTS; i++) ntlOffsets[i] *= norm;
+}
+
+function applyNTLOffsets() {
+    for (let i = 0; i < MAX_POINTS; i++) {
+        targetPositions[i * 3]     = baseTargetPositions[i * 3];
+        targetPositions[i * 3 + 1] = baseTargetPositions[i * 3 + 1];
+        targetPositions[i * 3 + 2] = baseTargetPositions[i * 3 + 2] + ntlOffsets[i];
+    }
+    lerpActive = true;
+}
+
+// --- Sieve of Eratosthenes Animation ---
+let sieveModeActive = false;
+let sievePlaying = false;
+let sieveSpeed = 1.0;         // multiplier; controls steps/frame
+let sieveCurrentP = 2;        // the prime we are currently sieving multiples of
+let sieveNextMultiple = 4;    // next multiple of sieveCurrentP to eliminate
+let sieveLimit = 0;           // activePointCount snapshot when mode was entered
+let sieveFinished = false;
+let sieveFoundCount = 0;      // primes confirmed so far
+// Per-particle state: 0=unknown, 1=confirmed prime, 2=eliminated
+const sieveState = new Uint8Array(MAX_POINTS + 1);
+// Per-particle alpha for fade-out: 1.0=fully visible, 0.0=gone
+const sieveAlpha = new Float32Array(MAX_POINTS + 1).fill(1.0);
+// Accumulated fractional steps (sub-frame speed accumulator)
+let sieveAccum = 0;
+// Constant fade speed per frame (fraction of alpha removed)
+const SIEVE_FADE_SPEED = 0.04;
+
+function _sieveReset() {
+    sievePlaying = false;
+    sieveFinished = false;
+    sieveCurrentP = 2;
+    sieveNextMultiple = 4;
+    sieveFoundCount = 0;
+    sieveAccum = 0;
+    sieveState.fill(0);
+    sieveAlpha.fill(1.0);
+    sieveState[1] = 2;  // 1 is not prime
+    sieveState[2] = 1;  // 2 is the first prime
+    sieveFoundCount = 1;
+    _sieveFlushVisuals();
+    _sieveUpdateStats();
+}
+
+// Advance the sieve by exactly one "prime confirmation + start eliminating its multiples"
+// Returns true if a new prime was confirmed (used for step button)
+function sieveAdvanceStep() {
+    if (sieveFinished) return false;
+
+    // Eliminate all multiples of sieveCurrentP up to sieveLimit
+    const p = sieveCurrentP;
+    for (let m = sieveNextMultiple; m <= sieveLimit; m += p) {
+        if (sieveState[m] === 0) sieveState[m] = 2; // mark eliminated
+    }
+
+    // Find next prime candidate
+    let next = p + 1;
+    while (next <= sieveLimit && sieveState[next] !== 0) next++;
+
+    if (next > sieveLimit) {
+        // Sieve complete — everything remaining unmarked is prime
+        for (let n = 2; n <= sieveLimit; n++) {
+            if (sieveState[n] === 0) { sieveState[n] = 1; sieveFoundCount++; }
+        }
+        sieveFinished = true;
+        sievePlaying = false;
+        _sieveUpdateUI();
+        return false;
+    }
+
+    // Confirm next as prime
+    sieveState[next] = 1;
+    sieveFoundCount++;
+    sieveCurrentP = next;
+    sieveNextMultiple = next * 2;  // start from 2p (p² already covered by earlier steps would miss 2p etc.)
+
+    // Optimisation: if p > √sieveLimit all remaining unknowns are prime
+    if (next * next > sieveLimit) {
+        for (let n = next + 1; n <= sieveLimit; n++) {
+            if (sieveState[n] === 0) { sieveState[n] = 1; sieveFoundCount++; }
+        }
+        sieveFinished = true;
+        sievePlaying = false;
+        _sieveUpdateUI();
+        return true;
+    }
+
+    return true;
+}
+
+function _sieveFlushVisuals() {
+    if (!sieveModeActive || !geometry) return;
+    const cols  = geometry.attributes.customColor.array;
+    const sizes = geometry.attributes.size.array;
+    const color = new THREE.Color();
+
+    for (let n = 1; n <= sieveLimit; n++) {
+        const i = n - 1;
+        const alpha = sieveAlpha[n];
+        const state = sieveState[n];
+
+        if (state === 2 && alpha <= 0.0) {
+            sizes[i] = 0.0;
+            continue;
+        }
+
+        if (state === 1) {
+            // Confirmed prime — gold glow
+            color.set(0xffd700);
+            sizes[i] = 80.0;
+        } else if (state === 2) {
+            // Fading out composite — red shrinking
+            color.setHSL(0.0, 0.9, 0.4 * alpha);
+            sizes[i] = Math.max(0, 40.0 * alpha);
+        } else {
+            // Unknown — cool blue-grey candidate
+            color.setHSL(0.58, 0.6, 0.35);
+            sizes[i] = 35.0;
+        }
+        cols[i*3] = color.r * alpha;
+        cols[i*3+1] = color.g * alpha;
+        cols[i*3+2] = color.b * alpha;
+    }
+    // Hide particles beyond sieveLimit
+    for (let n = sieveLimit + 1; n <= MAX_POINTS; n++) {
+        sizes[n - 1] = 0.0;
+    }
+    geometry.attributes.customColor.needsUpdate = true;
+    geometry.attributes.size.needsUpdate = true;
+}
+
+function _sieveUpdateStats() {
+    const el = document.getElementById('sieve-stats');
+    if (!el) return;
+    if (sieveFinished) {
+        el.textContent = `Done — ${sieveFoundCount} primes found`;
+        return;
+    }
+    const sqrtN = Math.floor(Math.sqrt(sieveLimit));
+    el.textContent = `Sieving ×${sieveCurrentP} | Primes: ${sieveFoundCount} | √N=${sqrtN}`;
+    const prog = document.getElementById('sieve-progress');
+    if (prog) prog.value = Math.min(sieveCurrentP / sqrtN, 1.0) * 100;
+}
+
+function _sieveUpdateUI() {
+    const btn = document.getElementById('sieve-play-btn');
+    if (btn) btn.textContent = sievePlaying ? '⏸ Pause' : '▶ Play';
+    _sieveUpdateStats();
+}
+
+// Called every frame from animate() when sieveModeActive
+function sieveTick(dt) {
+    if (!sievePlaying || sieveFinished) {
+        // Still need to animate fade-outs even when paused
+        _sieveFadeStep();
+        return;
+    }
+
+    // Accumulate time → steps
+    // sieveSpeed=1 → ~2 steps/sec; we use a steps/sec = 2^sieveSpeed curve for wide range
+    const stepsPerSec = Math.pow(2, sieveSpeed * 3);  // 1x→8/s, 5x→32768/s
+    sieveAccum += stepsPerSec * dt;
+
+    let dirty = false;
+    let budget = Math.min(Math.ceil(sieveAccum), 2000); // cap per-frame work
+    while (sieveAccum >= 1 && !sieveFinished && budget-- > 0) {
+        sieveAccum -= 1;
+        const advanced = sieveAdvanceStep();
+        dirty = true;
+        if (!advanced) break;
+    }
+
+    _sieveFadeStep();
+    if (dirty) {
+        _sieveFlushVisuals();
+        _sieveUpdateStats();
+    }
+}
+
+function _sieveFadeStep() {
+    if (!geometry) return;
+    let anyFading = false;
+    const sizes = geometry.attributes.size.array;
+    const cols  = geometry.attributes.customColor.array;
+    const color = new THREE.Color();
+
+    for (let n = 1; n <= sieveLimit; n++) {
+        if (sieveState[n] !== 2) continue;
+        const prev = sieveAlpha[n];
+        if (prev <= 0) continue;
+        anyFading = true;
+        const alpha = Math.max(0, prev - SIEVE_FADE_SPEED);
+        sieveAlpha[n] = alpha;
+        const i = n - 1;
+        color.setHSL(0.0, 0.9, 0.4 * alpha);
+        cols[i*3] = color.r; cols[i*3+1] = color.g; cols[i*3+2] = color.b;
+        sizes[i] = Math.max(0, 40.0 * alpha);
+    }
+    if (anyFading) {
+        geometry.attributes.customColor.needsUpdate = true;
+        geometry.attributes.size.needsUpdate = true;
+    }
+}
+
+// --- Prime Dimension Mode ---
+let primeDimModeActive = false;
+let primeDimP = [2, 3, 5];        // [px, py, pz]
+let primeDimOnlyChosen = false;   // show only multiples of chosen primes
+// Valuation cache for each of the 3 axes (recomputed when primes change)
+const primeDimValX = new Int16Array(MAX_POINTS + 1);
+const primeDimValY = new Int16Array(MAX_POINTS + 1);
+const primeDimValZ = new Int16Array(MAX_POINTS + 1);
+// Axis line objects and label sprites (added/removed from scene)
+let primeDimAxisLines = null;
+let primeDimAxisLabels = [];
+
+function computePadicValuations(p) {
+    for (let n = 1; n <= MAX_POINTS; n++) {
+        let m = n, v = 0;
+        while (m % p === 0) { m = (m / p) | 0; v++; }
+        padicVal[n] = v;
+    }
+}
+
+function computePrimeDimValuations() {
+    const [px, py, pz] = primeDimP;
+    for (let n = 1; n <= MAX_POINTS; n++) {
+        let m, v;
+        m = n; v = 0; while (m % px === 0) { m = (m / px) | 0; v++; } primeDimValX[n] = v;
+        m = n; v = 0; while (m % py === 0) { m = (m / py) | 0; v++; } primeDimValY[n] = v;
+        m = n; v = 0; while (m % pz === 0) { m = (m / pz) | 0; v++; } primeDimValZ[n] = v;
+    }
+}
+
+function applyPrimeDimPositions() {
+    const scale = currentSpacing * 15;
+    const [px, py, pz] = primeDimP;
+
+    for (let n = 1; n <= MAX_POINTS; n++) {
+        const i = n - 1;
+        const vx = primeDimValX[n];
+        const vy = primeDimValY[n];
+        const vz = primeDimValZ[n];
+
+        let x, y, z;
+        if (vx === 0 && vy === 0 && vz === 0) {
+            // Not a multiple of any chosen prime — cluster near origin with small jitter
+            const hash = ((n * 2654435761) >>> 0);
+            const jitter = scale * 0.08;
+            x = ((hash & 0xFF) / 255 - 0.5) * jitter;
+            y = (((hash >> 8) & 0xFF) / 255 - 0.5) * jitter;
+            z = (((hash >> 16) & 0xFF) / 255 - 0.5) * jitter;
+        } else {
+            x = vx * scale;
+            y = vy * scale;
+            z = vz * scale;
+        }
+
+        baseTargetPositions[i * 3]     = x;
+        baseTargetPositions[i * 3 + 1] = y;
+        baseTargetPositions[i * 3 + 2] = z;
+    }
+
+    for (let i = 0; i < MAX_POINTS * 3; i++) targetPositions[i] = baseTargetPositions[i];
+    lerpActive = true;
+}
+
+function buildPrimeDimAxisObjects() {
+    removePrimeDimAxisObjects();
+    const [px, py, pz] = primeDimP;
+    const len = currentSpacing * 15 * 6;
+
+    const mat = new THREE.LineBasicMaterial({ color: 0x00f2ff, transparent: true, opacity: 0.4 });
+    const axes = [
+        { dir: new THREE.Vector3(len, 0, 0), label: `p=${px}` },
+        { dir: new THREE.Vector3(0, len, 0), label: `p=${py}` },
+        { dir: new THREE.Vector3(0, 0, len), label: `p=${pz}` },
+    ];
+
+    const lineGroup = new THREE.Group();
+    for (const ax of axes) {
+        const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), ax.dir]);
+        lineGroup.add(new THREE.Line(geo, mat));
+    }
+    scene.add(lineGroup);
+    primeDimAxisLines = lineGroup;
+
+    // Sprite labels using canvas texture
+    const labelColors = ['#ff6666', '#66ff66', '#6699ff'];
+    const labelDirs = [
+        new THREE.Vector3(len + currentSpacing * 20, 0, 0),
+        new THREE.Vector3(0, len + currentSpacing * 20, 0),
+        new THREE.Vector3(0, 0, len + currentSpacing * 20),
+    ];
+    for (let i = 0; i < 3; i++) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 128; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, 128, 64);
+        ctx.font = 'bold 28px Orbitron, sans-serif';
+        ctx.fillStyle = labelColors[i];
+        ctx.shadowColor = labelColors[i];
+        ctx.shadowBlur = 10;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`p=${[px,py,pz][i]}`, 64, 32);
+        const tex = new THREE.CanvasTexture(canvas);
+        const mat2 = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false });
+        const sprite = new THREE.Sprite(mat2);
+        sprite.position.copy(labelDirs[i]);
+        sprite.scale.set(currentSpacing * 18, currentSpacing * 9, 1);
+        scene.add(sprite);
+        primeDimAxisLabels.push(sprite);
+    }
+}
+
+function removePrimeDimAxisObjects() {
+    if (primeDimAxisLines) { scene.remove(primeDimAxisLines); primeDimAxisLines = null; }
+    for (const s of primeDimAxisLabels) scene.remove(s);
+    primeDimAxisLabels = [];
+}
+
+function applyPadicPositions() {
+    // Place particles on concentric spherical shells ordered by |n|_p = p^{-v_p(n)}.
+    // Radial distance r = p^{-v} * scaleFactor (outer = 1, inner layers = 1/p, 1/p^2, ...).
+    // Within each shell, arrange by spiral index to preserve angular structure.
+    const scaleFactor = currentSpacing * 20;
+
+    // Group indices by valuation
+    const maxV = Math.ceil(Math.log(MAX_POINTS) / Math.log(padicP));
+    const shells = new Array(maxV + 1).fill(null).map(() => []);
+    for (let n = 1; n <= MAX_POINTS; n++) {
+        const v = Math.min(padicVal[n], maxV);
+        shells[v].push(n - 1); // 0-based index
+    }
+
+    // Fibonacci / golden-angle spiral to distribute points on each shell
+    const phi = Math.PI * (3 - Math.sqrt(5)); // golden angle
+    for (let v = 0; v <= maxV; v++) {
+        const shell = shells[v];
+        if (shell.length === 0) continue;
+        const r = (Math.pow(padicP, -v)) * scaleFactor;
+        const count = shell.length;
+        for (let k = 0; k < count; k++) {
+            const idx = shell[k];
+            const y = 1 - (k / (count - 1 || 1)) * 2;
+            const rxy = Math.sqrt(Math.max(0, 1 - y * y));
+            const angle = phi * k;
+            baseTargetPositions[idx * 3]     = r * rxy * Math.cos(angle);
+            baseTargetPositions[idx * 3 + 1] = r * y;
+            baseTargetPositions[idx * 3 + 2] = r * rxy * Math.sin(angle);
+        }
+    }
+
+    if (zetaModeActive) {
+        computeZetaOffsets(zetaZeroCount);
+        applyZetaOffsets();
+    } else {
+        for (let i = 0; i < MAX_POINTS * 3; i++) targetPositions[i] = baseTargetPositions[i];
+        lerpActive = true;
+    }
+}
+
+// --- Zeta Wave Mode ---
+let zetaModeActive = false;
+let zetaZeroCount = 0;      // N: number of zeros to use (0-100)
+let zetaAmplitude = 1.0;    // amplitude scale
+let zetaAnimating = false;
+let zetaAnimFrame = null;
+const baseTargetPositions = new Float32Array(MAX_POINTS * 3); // lattice positions without zeta offset
+const zetaOffsets = new Float32Array(MAX_POINTS);             // Z-axis offset per particle
+
+// First 100 non-trivial zeros of the Riemann zeta function (imaginary parts γ_n)
+// Source: Andrew Odlyzko's tables
+const ZETA_ZEROS = [
+    14.134725, 21.022040, 25.010858, 30.424876, 32.935062,
+    37.586178, 40.918719, 43.327073, 48.005151, 49.773832,
+    52.970321, 56.446248, 59.347044, 60.831779, 65.112544,
+    67.079811, 69.546402, 72.067158, 75.704691, 77.144840,
+    79.337376, 82.910381, 84.735493, 87.425275, 88.809112,
+    92.491899, 94.651344, 95.870634, 98.831194, 101.317851,
+    103.725538, 105.446623, 107.168611, 111.029536, 111.874659,
+    114.320220, 116.226680, 118.790783, 121.370125, 122.946829,
+    124.256819, 127.516684, 129.578704, 131.087688, 133.497737,
+    134.756510, 138.116042, 139.736209, 141.123707, 143.111846,
+    146.000982, 147.422765, 150.053521, 150.925258, 153.024694,
+    156.112909, 157.597591, 158.849989, 161.188965, 163.030710,
+    165.537069, 167.184439, 169.094515, 169.911976, 173.411536,
+    174.754191, 176.441434, 178.377407, 179.916484, 182.207078,
+    184.874468, 185.598783, 187.228922, 189.416159, 192.026657,
+    193.079726, 195.265397, 196.876481, 198.015309, 201.264751,
+    202.493595, 204.189671, 205.394697, 207.906259, 209.576509,
+    211.690862, 213.347919, 214.547044, 216.169538, 219.067596,
+    220.714918, 221.430705, 224.007000, 224.983324, 227.421444,
+    229.337413, 231.250189, 231.987235, 233.693404, 236.524230,
+];
+
+// Pre-computed ln(x) and sqrt(x) cache to avoid repeated log/sqrt per slider change
+const _lnCache = new Float64Array(MAX_POINTS);
+const _sqrtCache = new Float64Array(MAX_POINTS);
+(function buildMathCache() {
+    for (let i = 0; i < MAX_POINTS; i++) {
+        const x = i + 1;
+        _lnCache[i] = Math.log(x);
+        _sqrtCache[i] = Math.sqrt(x);
+    }
+})();
+
+// Pre-computed per-zero denominator (constant for each γ)
+const _zetaDenom = new Float64Array(100);
+for (let k = 0; k < 100; k++) {
+    const g = ZETA_ZEROS[k];
+    _zetaDenom[k] = 0.25 + g * g;
+}
+
+function computeZetaOffsets(N) {
+    if (!zetaModeActive || N === 0) {
+        zetaOffsets.fill(0);
+        return;
+    }
+    // For each x=n, compute sum of 2·Re(x^ρ/ρ) over k=0..N-1
+    // Re(x^ρ/ρ) = sqrt(x) * [cos(γ·ln(x))*(1/2) + sin(γ·ln(x))*γ] / (1/4 + γ²)
+    for (let i = 0; i < MAX_POINTS; i++) {
+        const lnx   = _lnCache[i];
+        const sqrtx = _sqrtCache[i];
+        let sum = 0;
+        for (let k = 0; k < N; k++) {
+            const g = ZETA_ZEROS[k];
+            const angle = g * lnx;
+            sum += sqrtx * (Math.cos(angle) * 0.5 + Math.sin(angle) * g) / _zetaDenom[k];
+        }
+        zetaOffsets[i] = -2.0 * sum;
+    }
+
+    // Normalize so visual scale stays consistent regardless of N
+    let maxAbs = 0;
+    for (let i = 0; i < MAX_POINTS; i++) {
+        const a = Math.abs(zetaOffsets[i]);
+        if (a > maxAbs) maxAbs = a;
+    }
+    if (maxAbs > 0) {
+        const scale = (currentSpacing * 8.0 * zetaAmplitude) / maxAbs;
+        for (let i = 0; i < MAX_POINTS; i++) zetaOffsets[i] *= scale;
+    }
+}
+
+function applyZetaOffsets() {
+    for (let i = 0; i < MAX_POINTS; i++) {
+        targetPositions[i * 3]     = baseTargetPositions[i * 3];
+        targetPositions[i * 3 + 1] = baseTargetPositions[i * 3 + 1];
+        targetPositions[i * 3 + 2] = baseTargetPositions[i * 3 + 2] + zetaOffsets[i];
+    }
+    lerpActive = true;
+}
+
 // --- State ---
 let scene, camera, cameraL, cameraR, renderer, controls, points, geometry;
 const isPrimeArray = new Uint8Array(MAX_POINTS + 1);
@@ -171,6 +727,7 @@ function init() {
     }
 
     generatePrimes(MAX_POINTS);
+    computeNTLTables();
     classifyNumbers();
     buildTypeUI();
     createParticles();
@@ -218,6 +775,300 @@ function init() {
         updateParticleVisuals();
         updateTypeUI();
     };
+
+    // Zeta Wave Mode controls
+    window.toggleZetaMode = () => {
+        zetaModeActive = !zetaModeActive;
+        document.getElementById('zeta-controls').style.display = zetaModeActive ? '' : 'none';
+        document.getElementById('sw-zeta').classList.toggle('on', zetaModeActive);
+        if (zetaModeActive) {
+            computeZetaOffsets(zetaZeroCount);
+            applyZetaOffsets();
+        } else {
+            if (zetaAnimating) {
+                zetaAnimating = false;
+                clearTimeout(zetaAnimFrame);
+                document.getElementById('zeta-anim-btn').textContent = 'Animate';
+            }
+            zetaOffsets.fill(0);
+            for (let i = 0; i < MAX_POINTS * 3; i++) targetPositions[i] = baseTargetPositions[i];
+            lerpActive = true;
+        }
+    };
+
+    const zetaNSlider = document.getElementById('zeta-n-slider');
+    zetaNSlider.addEventListener('input', (e) => {
+        zetaZeroCount = parseInt(e.target.value);
+        document.getElementById('zeta-n-val').innerText = zetaZeroCount;
+        if (zetaModeActive) { computeZetaOffsets(zetaZeroCount); applyZetaOffsets(); }
+    });
+
+    const zetaAmpSlider = document.getElementById('zeta-amp-slider');
+    zetaAmpSlider.addEventListener('input', (e) => {
+        zetaAmplitude = parseFloat(e.target.value);
+        document.getElementById('zeta-amp-val').innerText = zetaAmplitude.toFixed(1);
+        if (zetaModeActive) { computeZetaOffsets(zetaZeroCount); applyZetaOffsets(); }
+    });
+
+    window.animateZeta = () => {
+        if (zetaAnimating) {
+            zetaAnimating = false;
+            document.getElementById('zeta-anim-btn').textContent = 'Animate';
+            return;
+        }
+        zetaAnimating = true;
+        document.getElementById('zeta-anim-btn').textContent = 'Stop';
+        if (!zetaModeActive) window.toggleZetaMode();
+        const target = zetaZeroCount > 0 ? zetaZeroCount : 100;
+        zetaZeroCount = 0;
+        document.getElementById('zeta-n-slider').value = 0;
+        document.getElementById('zeta-n-val').innerText = 0;
+        computeZetaOffsets(0);
+        applyZetaOffsets();
+
+        let n = 0;
+        const step = () => {
+            if (!zetaAnimating || n >= target) {
+                zetaAnimating = false;
+                document.getElementById('zeta-anim-btn').textContent = 'Animate';
+                return;
+            }
+            n++;
+            zetaZeroCount = n;
+            document.getElementById('zeta-n-slider').value = n;
+            document.getElementById('zeta-n-val').innerText = n;
+            computeZetaOffsets(n);
+            applyZetaOffsets();
+            // Slow down near end for dramatic effect; speed: 80ms per step base
+            const delay = n < 10 ? 500 : n < 30 ? 300 : n < 60 ? 150 : 80;
+            zetaAnimFrame = setTimeout(step, delay);
+        };
+        zetaAnimFrame = setTimeout(step, 300);
+    };
+
+    // p-adic Mode controls
+    window.togglePadicMode = () => {
+        padicModeActive = !padicModeActive;
+        document.getElementById('padic-controls').style.display = padicModeActive ? '' : 'none';
+        document.getElementById('sw-padic').classList.toggle('on', padicModeActive);
+        if (padicModeActive) {
+            computePadicValuations(padicP);
+            applyPadicPositions();
+            updatePadicColorVisuals();
+        } else {
+            if (padicAnimating) {
+                padicAnimating = false;
+                clearTimeout(padicAnimFrame);
+                document.getElementById('padic-anim-btn').textContent = 'Animate p';
+            }
+            padicColorMode = false;
+            document.getElementById('sw-padic-color').classList.remove('on');
+            calculateTargetPositions();
+            updateParticleVisuals();
+        }
+        updateUIDisabledState();
+    };
+
+    window.setPadicP = (p) => {
+        padicP = parseInt(p);
+        document.getElementById('padic-p-val').innerText = padicP;
+        if (padicModeActive) {
+            computePadicValuations(padicP);
+            applyPadicPositions();
+            updatePadicColorVisuals();
+        }
+    };
+
+    window.togglePadicColor = () => {
+        padicColorMode = !padicColorMode;
+        document.getElementById('sw-padic-color').classList.toggle('on', padicColorMode);
+        updatePadicColorVisuals();
+    };
+
+    window.animatePadic = () => {
+        if (padicAnimating) {
+            padicAnimating = false;
+            clearTimeout(padicAnimFrame);
+            document.getElementById('padic-anim-btn').textContent = 'Animate p';
+            return;
+        }
+        padicAnimating = true;
+        document.getElementById('padic-anim-btn').textContent = 'Stop';
+        if (!padicModeActive) window.togglePadicMode();
+        let idx = PADIC_PRIMES.indexOf(padicP);
+        if (idx < 0) idx = 0;
+
+        const step = () => {
+            if (!padicAnimating) {
+                document.getElementById('padic-anim-btn').textContent = 'Animate p';
+                return;
+            }
+            idx = (idx + 1) % PADIC_PRIMES.length;
+            padicP = PADIC_PRIMES[idx];
+            document.getElementById('padic-p-select').value = padicP;
+            document.getElementById('padic-p-val').innerText = padicP;
+            computePadicValuations(padicP);
+            applyPadicPositions();
+            updatePadicColorVisuals();
+            padicAnimFrame = setTimeout(step, 1800);
+        };
+        padicAnimFrame = setTimeout(step, 300);
+    };
+
+    // Prime Dimension Mode controls
+    window.togglePrimeDimMode = () => {
+        primeDimModeActive = !primeDimModeActive;
+        document.getElementById('primedim-controls').style.display = primeDimModeActive ? '' : 'none';
+        document.getElementById('sw-primedim').classList.toggle('on', primeDimModeActive);
+        if (primeDimModeActive) {
+            computePrimeDimValuations();
+            applyPrimeDimPositions();
+            buildPrimeDimAxisObjects();
+            updatePrimeDimVisuals();
+        } else {
+            removePrimeDimAxisObjects();
+            primeDimOnlyChosen = false;
+            document.getElementById('sw-primedim-only').classList.remove('on');
+            calculateTargetPositions();
+            updateParticleVisuals();
+        }
+        updateUIDisabledState();
+    };
+
+    window.setPrimeDimAxis = (axisIdx, p) => {
+        primeDimP[axisIdx] = parseInt(p);
+        if (primeDimModeActive) {
+            computePrimeDimValuations();
+            applyPrimeDimPositions();
+            buildPrimeDimAxisObjects();
+            updatePrimeDimVisuals();
+        }
+    };
+
+    window.randomPrimeDimTriple = () => {
+        const pool = PADIC_PRIMES.slice();
+        // pick 3 distinct primes
+        const chosen = [];
+        while (chosen.length < 3) {
+            const idx = Math.floor(Math.random() * pool.length);
+            chosen.push(pool.splice(idx, 1)[0]);
+        }
+        chosen.sort((a, b) => a - b);
+        primeDimP = chosen;
+        document.getElementById('primedim-x-select').value = chosen[0];
+        document.getElementById('primedim-y-select').value = chosen[1];
+        document.getElementById('primedim-z-select').value = chosen[2];
+        if (primeDimModeActive) {
+            computePrimeDimValuations();
+            applyPrimeDimPositions();
+            buildPrimeDimAxisObjects();
+            updatePrimeDimVisuals();
+        }
+    };
+
+    window.togglePrimeDimOnly = () => {
+        primeDimOnlyChosen = !primeDimOnlyChosen;
+        document.getElementById('sw-primedim-only').classList.toggle('on', primeDimOnlyChosen);
+        if (primeDimModeActive) updatePrimeDimVisuals();
+    };
+
+    // Number Theoretic Landscape controls
+    window.toggleNTLMode = () => {
+        ntlModeActive = !ntlModeActive;
+        document.getElementById('sw-ntl').classList.toggle('on', ntlModeActive);
+        document.getElementById('ntl-controls').style.display = ntlModeActive ? '' : 'none';
+        if (ntlModeActive) {
+            computeNTLOffsets();
+            applyNTLOffsets();
+            updateNTLVisuals();
+        } else {
+            ntlOffsets.fill(0);
+            for (let i = 0; i < MAX_POINTS * 3; i++) targetPositions[i] = baseTargetPositions[i];
+            lerpActive = true;
+            updateParticleVisuals();
+        }
+    };
+
+    window.setNTLFunc = (f) => {
+        ntlFunc = f;
+        if (ntlModeActive) {
+            computeNTLOffsets();
+            applyNTLOffsets();
+            updateNTLVisuals();
+        }
+    };
+
+    window.toggleNTLPerfect = () => {
+        ntlHighlightPerfect = !ntlHighlightPerfect;
+        document.getElementById('sw-ntl-perfect').classList.toggle('on', ntlHighlightPerfect);
+        if (ntlModeActive) updateNTLVisuals();
+    };
+
+    window.toggleNTLHC = () => {
+        ntlHighlightHC = !ntlHighlightHC;
+        document.getElementById('sw-ntl-hc').classList.toggle('on', ntlHighlightHC);
+        if (ntlModeActive) updateNTLVisuals();
+    };
+
+    document.getElementById('ntl-scale-slider').addEventListener('input', (e) => {
+        ntlScale = parseFloat(e.target.value);
+        document.getElementById('ntl-scale-val').innerText = ntlScale.toFixed(1);
+        if (ntlModeActive) { computeNTLOffsets(); applyNTLOffsets(); }
+    });
+
+    // Sieve Animation controls
+    window.toggleSieveMode = () => {
+        sieveModeActive = !sieveModeActive;
+        document.getElementById('sw-sieve').classList.toggle('on', sieveModeActive);
+        document.getElementById('sieve-controls').style.display = sieveModeActive ? '' : 'none';
+        if (sieveModeActive) {
+            sieveLimit = activePointCount;
+            _sieveReset();
+        } else {
+            sievePlaying = false;
+            updateParticleVisuals();
+        }
+    };
+
+    window.sievePlay = () => {
+        if (!sieveModeActive) return;
+        if (sieveFinished) _sieveReset();
+        sievePlaying = true;
+        _sieveUpdateUI();
+    };
+
+    window.sievePause = () => {
+        sievePlaying = false;
+        _sieveUpdateUI();
+    };
+
+    window.sievePlayPause = () => {
+        if (!sieveModeActive) return;
+        if (sieveFinished) { _sieveReset(); sievePlaying = true; }
+        else sievePlaying = !sievePlaying;
+        _sieveUpdateUI();
+    };
+
+    window.sieveStep = () => {
+        if (!sieveModeActive || sieveFinished) return;
+        sievePlaying = false;
+        sieveAdvanceStep();
+        _sieveFlushVisuals();
+        _sieveUpdateStats();
+        _sieveUpdateUI();
+    };
+
+    window.sieveReset = () => {
+        if (!sieveModeActive) return;
+        sieveLimit = activePointCount;
+        _sieveReset();
+        _sieveUpdateUI();
+    };
+
+    document.getElementById('sieve-speed-slider').addEventListener('input', (e) => {
+        sieveSpeed = parseFloat(e.target.value);
+        document.getElementById('sieve-speed-val').innerText = sieveSpeed.toFixed(1) + 'x';
+    });
 
     const sSlider = document.getElementById('spacing-slider');
     sSlider.addEventListener('input', (e) => {
@@ -287,6 +1138,31 @@ function generatePrimes(n) {
 }
 
 // ---------------------------------------------------------------------------
+// Disable/enable UI groups based on active modes
+// ---------------------------------------------------------------------------
+function setGroupDisabled(id, disabled) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.toggle('ui-section-disabled', disabled);
+}
+
+function updateUIDisabledState() {
+    const padic = padicModeActive;
+    const pdim  = primeDimModeActive;
+    // NTL mode is an overlay (like zeta), not a position-owner, so it doesn't disable lattice controls
+    const exclusivePos = padic || pdim;
+    setGroupDisabled('group-lattice',        exclusivePos);
+    setGroupDisabled('group-spacing',        exclusivePos);
+    setGroupDisabled('group-zeta-toggle',    exclusivePos);
+    setGroupDisabled('zeta-controls',        exclusivePos);
+    setGroupDisabled('group-padic-toggle',   pdim);
+    setGroupDisabled('padic-controls',       pdim);
+    setGroupDisabled('group-primedim-toggle', padic);
+    setGroupDisabled('primedim-controls',    padic);
+    // NTL controls are shown/hidden via display, no need to disable here
+}
+
+// ---------------------------------------------------------------------------
 // updateUI
 // ---------------------------------------------------------------------------
 function updateUI() {
@@ -313,7 +1189,181 @@ function updateUI() {
     const typePanel = document.getElementById('type-panel');
     if (typePanel) typePanel.style.display = (colorMode === 'types') ? '' : 'none';
 
+    document.getElementById('sw-zeta').classList.toggle('on', zetaModeActive);
+    document.getElementById('zeta-controls').style.display = zetaModeActive ? '' : 'none';
+
+    document.getElementById('sw-padic').classList.toggle('on', padicModeActive);
+    document.getElementById('padic-controls').style.display = padicModeActive ? '' : 'none';
+
+    document.getElementById('sw-primedim').classList.toggle('on', primeDimModeActive);
+    document.getElementById('primedim-controls').style.display = primeDimModeActive ? '' : 'none';
+
+    document.getElementById('sw-ntl').classList.toggle('on', ntlModeActive);
+    document.getElementById('ntl-controls').style.display = ntlModeActive ? '' : 'none';
+
+    document.getElementById('sw-sieve').classList.toggle('on', sieveModeActive);
+    document.getElementById('sieve-controls').style.display = sieveModeActive ? '' : 'none';
+
     updateTypeUI();
+    updateUIDisabledState();
+}
+
+// ---------------------------------------------------------------------------
+// p-adic color visuals (overlays valuation layers when padicColorMode is on)
+// ---------------------------------------------------------------------------
+function updatePadicColorVisuals() {
+    if (!padicModeActive || !padicColorMode) {
+        updateParticleVisuals();
+        return;
+    }
+    const cols = geometry.attributes.customColor.array;
+    const sizes = geometry.attributes.size.array;
+    const color = new THREE.Color();
+    const maxV = Math.ceil(Math.log(MAX_POINTS) / Math.log(padicP));
+
+    for (let n = 1; n <= MAX_POINTS; n++) {
+        const i = n - 1;
+        if (n > activePointCount) { sizes[i] = 0.0; continue; }
+        if (!isCompositeVisible(n)) { sizes[i] = 0.0; continue; }
+
+        const v = Math.min(padicVal[n], maxV);
+        if (v === 0) {
+            // not divisible by p — outermost shell, dim
+            color.setHSL(0.6, 0.3, 0.25);
+            sizes[i] = isPrimeArray[n] ? 70.0 : 22.0;
+        } else {
+            // hue sweeps through layers: v=1 cyan, v=2 green, v=3 yellow, higher → red/magenta
+            const hue = (1.0 - Math.min(v / maxV, 1.0)) * 0.55 + 0.05;
+            const lightness = 0.4 + Math.min(v / maxV, 1.0) * 0.35;
+            color.setHSL(hue, 1.0, lightness);
+            sizes[i] = isPrimeArray[n] ? 80.0 : Math.min(20 + v * 8, 55);
+        }
+        cols[i*3] = color.r; cols[i*3+1] = color.g; cols[i*3+2] = color.b;
+    }
+    geometry.attributes.customColor.needsUpdate = true;
+    geometry.attributes.size.needsUpdate = true;
+}
+
+// ---------------------------------------------------------------------------
+// Number Theoretic Landscape visuals
+// ---------------------------------------------------------------------------
+function updateNTLVisuals() {
+    const cols  = geometry.attributes.customColor.array;
+    const sizes = geometry.attributes.size.array;
+    const color = new THREE.Color();
+
+    // Compute per-particle raw value for color mapping
+    let rawMin = Infinity, rawMax = -Infinity;
+    for (let n = 1; n <= MAX_POINTS; n++) {
+        const v = _ntlRawValue(n);
+        if (v < rawMin) rawMin = v;
+        if (v > rawMax) rawMax = v;
+    }
+    const rawRange = rawMax - rawMin || 1;
+
+    for (let n = 1; n <= MAX_POINTS; n++) {
+        const i = n - 1;
+        if (n > activePointCount) { sizes[i] = 0.0; continue; }
+        if (!isCompositeVisible(n)) { sizes[i] = 0.0; continue; }
+
+        const raw = _ntlRawValue(n);
+        const t = (raw - rawMin) / rawRange; // 0..1 normalized
+
+        const isPrime = !!isPrimeArray[n];
+        const isPerfect = PERFECT_NUMBERS.has(n);
+        const isHC = HC_NUMBERS.has(n);
+
+        if (isPerfect && ntlHighlightPerfect) {
+            color.set(0xffffff);
+            sizes[i] = 110.0;
+        } else if (isHC && ntlHighlightHC) {
+            color.set(0xffdd00);
+            sizes[i] = 95.0;
+        } else if (ntlFunc === 'mobius') {
+            // -1 → red, 0 → dark grey (flat), +1 → cyan
+            if (ntl_mu[n] === 0)       { color.setHSL(0.0, 0.0, 0.15); sizes[i] = 20.0; }
+            else if (ntl_mu[n] === -1) { color.set(0xff3333); sizes[i] = isPrime ? 80.0 : 45.0; }
+            else                       { color.set(0x00ffcc); sizes[i] = isPrime ? 80.0 : 45.0; }
+        } else {
+            // Hue: low value → blue/purple, high → yellow/red  (like a heatmap)
+            const hue = (1.0 - t) * 0.67;   // 0.67=blue → 0=red
+            const sat = isPrime ? 0.5 : 1.0;
+            const lit = isPrime ? 0.45 : 0.35 + t * 0.35;
+            color.setHSL(hue, sat, lit);
+            // Size: scaled by height, primes always visible
+            if (isPrime) {
+                sizes[i] = 70.0;
+            } else {
+                sizes[i] = Math.max(18, Math.min(85, 18 + t * 67));
+            }
+        }
+        cols[i*3] = color.r; cols[i*3+1] = color.g; cols[i*3+2] = color.b;
+    }
+    geometry.attributes.customColor.needsUpdate = true;
+    geometry.attributes.size.needsUpdate = true;
+}
+
+function _ntlRawValue(n) {
+    if      (ntlFunc === 'd')           return ntl_d[n];
+    else if (ntlFunc === 'sigma_ratio') return ntl_sigma[n];
+    else if (ntlFunc === 'omega')       return ntl_omega[n];
+    else if (ntlFunc === 'log_sigma')   return ntl_sigma[n] > 0 ? Math.log(ntl_sigma[n]) : 0;
+    else if (ntlFunc === 'mobius')      return ntl_mu[n];
+    else                                return ntl_phi[n] / n;
+}
+
+// ---------------------------------------------------------------------------
+// Prime Dimension Mode visuals
+// ---------------------------------------------------------------------------
+function updatePrimeDimVisuals() {
+    if (!primeDimModeActive) { updateParticleVisuals(); return; }
+
+    const cols  = geometry.attributes.customColor.array;
+    const sizes = geometry.attributes.size.array;
+    const color = new THREE.Color();
+    const [px, py, pz] = primeDimP;
+
+    for (let n = 1; n <= MAX_POINTS; n++) {
+        const i = n - 1;
+        if (n > activePointCount) { sizes[i] = 0.0; continue; }
+
+        const vx = primeDimValX[n];
+        const vy = primeDimValY[n];
+        const vz = primeDimValZ[n];
+        const isOnAxis = (vx > 0 || vy > 0 || vz > 0);
+
+        if (primeDimOnlyChosen && !isOnAxis) { sizes[i] = 0.0; continue; }
+        if (!isCompositeVisible(n)) { sizes[i] = 0.0; continue; }
+
+        if (!isOnAxis) {
+            // Not a multiple of any chosen prime — dim, small
+            color.setHSL(0.6, 0.2, 0.15);
+            sizes[i] = isPrimeArray[n] ? 45.0 : 18.0;
+        } else if (isPrimeArray[n]) {
+            // This is one of the chosen axis primes — bright, on a unit axis
+            if      (n === px) color.set(0xff6666);
+            else if (n === py) color.set(0x66ff66);
+            else if (n === pz) color.set(0x6699ff);
+            else               color.setHSL(0.55, 1.0, 0.75); // other prime (shouldn't normally hit axes)
+            sizes[i] = 90.0;
+        } else {
+            // Composite multiple — colour by which axes it lives on
+            const onX = vx > 0, onY = vy > 0, onZ = vz > 0;
+            const count = (onX ? 1 : 0) + (onY ? 1 : 0) + (onZ ? 1 : 0);
+            if      (count === 3) color.set(0xffffff);   // all three — white
+            else if (onX && onY)  color.set(0xffaa44);   // XY plane — orange
+            else if (onX && onZ)  color.set(0xcc44ff);   // XZ plane — purple
+            else if (onY && onZ)  color.set(0x44ffaa);   // YZ plane — teal
+            else if (onX)         color.set(0xff6666);   // X axis — red
+            else if (onY)         color.set(0x66ff66);   // Y axis — green
+            else                  color.set(0x6699ff);   // Z axis — blue
+            const depth = vx + vy + vz;
+            sizes[i] = Math.min(25 + depth * 10, 60);
+        }
+        cols[i*3] = color.r; cols[i*3+1] = color.g; cols[i*3+2] = color.b;
+    }
+    geometry.attributes.customColor.needsUpdate = true;
+    geometry.attributes.size.needsUpdate = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +1379,10 @@ function isCompositeVisible(n) {
 }
 
 function updateParticleVisuals() {
+    if (sieveModeActive)                     { _sieveFlushVisuals(); return; }
+    if (ntlModeActive)                       { updateNTLVisuals(); return; }
+    if (primeDimModeActive)                  { updatePrimeDimVisuals(); return; }
+    if (padicModeActive && padicColorMode)   { updatePadicColorVisuals(); return; }
     const cols = geometry.attributes.customColor.array;
     const sizes = geometry.attributes.size.array;
     const color = new THREE.Color(); // reused, no allocation per iteration
@@ -488,11 +1542,25 @@ function calculateTargetPositions() {
 
     for(let i=0;i<MAX_POINTS;i++){
         const c=candidates[i]||{x:0,y:0,z:0};
-        targetPositions[i*3]=c.x*currentSpacing;
-        targetPositions[i*3+1]=c.y*currentSpacing;
-        targetPositions[i*3+2]=c.z*currentSpacing;
+        baseTargetPositions[i*3]   = c.x*currentSpacing;
+        baseTargetPositions[i*3+1] = c.y*currentSpacing;
+        baseTargetPositions[i*3+2] = c.z*currentSpacing;
     }
-    lerpActive = true;
+    if (padicModeActive) {
+        applyPadicPositions();
+    } else if (primeDimModeActive) {
+        applyPrimeDimPositions();
+        buildPrimeDimAxisObjects();
+    } else if (zetaModeActive) {
+        computeZetaOffsets(zetaZeroCount);
+        applyZetaOffsets();
+    } else if (ntlModeActive) {
+        computeNTLOffsets();
+        applyNTLOffsets();
+    } else {
+        for (let i = 0; i < MAX_POINTS * 3; i++) targetPositions[i] = baseTargetPositions[i];
+        lerpActive = true;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -684,8 +1752,14 @@ function onWindowResize() {
 
 // lerp convergence: stop updating GPU buffer when all points are close enough
 const LERP_THRESHOLD_SQ = 0.25; // 0.5 units per axis
+let _lastTime = 0;
 
-function animate() {
+function animate(now = 0) {
+    const dt = Math.min((now - _lastTime) / 1000, 0.1); // seconds, clamped to 100ms
+    _lastTime = now;
+
+    if (sieveModeActive) sieveTick(dt);
+
     if (autoGrow && activePointCount < MAX_POINTS) {
         growSpeed *= 1.005;
         activePointCount = Math.min(MAX_POINTS, activePointCount + Math.floor(growSpeed));

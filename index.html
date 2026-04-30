@@ -13,6 +13,7 @@
     <div id="ui-overlay">
         <h1>PrimeCrystal</h1>
         
+        <div id="group-lattice">
         <div class="section-label">Lattice (Structure)</div>
         <select id="layout-select" onchange="setLayout(this.value)">
             <option value="cube">Cubic</option>
@@ -39,6 +40,7 @@
             <option value="zorder">Z-Order</option>
             <option value="modular">Modular ÷6</option>
         </select>
+        </div>
 
         <div class="section-label">Color Mode</div>
         <select id="color-select" onchange="setColorMode(this.value)">
@@ -54,6 +56,213 @@
         <div id="type-panel">
             <div class="section-label">Number Types</div>
             <div id="type-list"></div>
+        </div>
+
+        <div id="group-zeta-toggle">
+        <div class="section-label">Zeta Wave Mode</div>
+        <div class="toggle-row" onclick="toggleZetaMode()">
+            <span>Enable</span>
+            <div class="toggle-switch" id="sw-zeta"></div>
+        </div>
+        </div>
+        <div id="zeta-controls" style="display:none;">
+            <div class="section-label">Zeros N: <span id="zeta-n-val">0</span></div>
+            <input type="range" id="zeta-n-slider" min="0" max="100" value="0" step="1" style="width:100%;cursor:pointer;margin-bottom:8px;">
+            <div class="section-label">Amplitude: <span id="zeta-amp-val">1.0</span></div>
+            <input type="range" id="zeta-amp-slider" min="0.1" max="5.0" value="1.0" step="0.1" style="width:100%;cursor:pointer;margin-bottom:8px;">
+            <div class="controls">
+                <button id="zeta-anim-btn" onclick="animateZeta()">Animate</button>
+            </div>
+        </div>
+
+        <div id="group-padic-toggle">
+        <div class="section-label">p-adic View Mode</div>
+        <div class="toggle-row" onclick="togglePadicMode()">
+            <span>Enable</span>
+            <div class="toggle-switch" id="sw-padic"></div>
+        </div>
+        </div>
+        <div id="padic-controls" style="display:none;">
+            <div class="section-label">Prime p: <span id="padic-p-val">2</span></div>
+            <select id="padic-p-select" onchange="setPadicP(this.value)" style="width:100%;margin-bottom:8px;">
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="5">5</option>
+                <option value="7">7</option>
+                <option value="11">11</option>
+                <option value="13">13</option>
+                <option value="17">17</option>
+                <option value="19">19</option>
+                <option value="23">23</option>
+                <option value="29">29</option>
+                <option value="31">31</option>
+                <option value="37">37</option>
+                <option value="41">41</option>
+                <option value="43">43</option>
+                <option value="47">47</option>
+                <option value="53">53</option>
+                <option value="59">59</option>
+                <option value="61">61</option>
+                <option value="67">67</option>
+                <option value="71">71</option>
+                <option value="73">73</option>
+                <option value="79">79</option>
+                <option value="83">83</option>
+                <option value="89">89</option>
+                <option value="97">97</option>
+            </select>
+            <div class="toggle-row" onclick="togglePadicColor()">
+                <span>p-adic Layer Colors</span>
+                <div class="toggle-switch" id="sw-padic-color"></div>
+            </div>
+            <div class="controls">
+                <button id="padic-anim-btn" onclick="animatePadic()">Animate p</button>
+            </div>
+        </div>
+
+        <div id="group-primedim-toggle">
+        <div class="section-label">Prime Dimension Mode</div>
+        <div class="toggle-row" onclick="togglePrimeDimMode()">
+            <span>Enable</span>
+            <div class="toggle-switch" id="sw-primedim"></div>
+        </div>
+        </div>
+        <div id="primedim-controls" style="display:none;">
+            <div class="section-label">Axis X (red)</div>
+            <select id="primedim-x-select" onchange="setPrimeDimAxis(0, this.value)" style="width:100%;margin-bottom:6px;">
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="5">5</option>
+                <option value="7">7</option>
+                <option value="11">11</option>
+                <option value="13">13</option>
+                <option value="17">17</option>
+                <option value="19">19</option>
+                <option value="23">23</option>
+                <option value="29">29</option>
+                <option value="31">31</option>
+                <option value="37">37</option>
+                <option value="41">41</option>
+                <option value="43">43</option>
+                <option value="47">47</option>
+                <option value="53">53</option>
+                <option value="59">59</option>
+                <option value="61">61</option>
+                <option value="67">67</option>
+                <option value="71">71</option>
+                <option value="73">73</option>
+                <option value="79">79</option>
+                <option value="83">83</option>
+                <option value="89">89</option>
+                <option value="97">97</option>
+            </select>
+            <div class="section-label">Axis Y (green)</div>
+            <select id="primedim-y-select" onchange="setPrimeDimAxis(1, this.value)" style="width:100%;margin-bottom:6px;">
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="5">5</option>
+                <option value="7">7</option>
+                <option value="11">11</option>
+                <option value="13">13</option>
+                <option value="17">17</option>
+                <option value="19">19</option>
+                <option value="23">23</option>
+                <option value="29">29</option>
+                <option value="31">31</option>
+                <option value="37">37</option>
+                <option value="41">41</option>
+                <option value="43">43</option>
+                <option value="47">47</option>
+                <option value="53">53</option>
+                <option value="59">59</option>
+                <option value="61">61</option>
+                <option value="67">67</option>
+                <option value="71">71</option>
+                <option value="73">73</option>
+                <option value="79">79</option>
+                <option value="83">83</option>
+                <option value="89">89</option>
+                <option value="97">97</option>
+            </select>
+            <div class="section-label">Axis Z (blue)</div>
+            <select id="primedim-z-select" onchange="setPrimeDimAxis(2, this.value)" style="width:100%;margin-bottom:6px;">
+                <option value="2">2</option>
+                <option value="3">3</option>
+                <option value="5" selected>5</option>
+                <option value="7">7</option>
+                <option value="11">11</option>
+                <option value="13">13</option>
+                <option value="17">17</option>
+                <option value="19">19</option>
+                <option value="23">23</option>
+                <option value="29">29</option>
+                <option value="31">31</option>
+                <option value="37">37</option>
+                <option value="41">41</option>
+                <option value="43">43</option>
+                <option value="47">47</option>
+                <option value="53">53</option>
+                <option value="59">59</option>
+                <option value="61">61</option>
+                <option value="67">67</option>
+                <option value="71">71</option>
+                <option value="73">73</option>
+                <option value="79">79</option>
+                <option value="83">83</option>
+                <option value="89">89</option>
+                <option value="97">97</option>
+            </select>
+            <div class="toggle-row" onclick="togglePrimeDimOnly()">
+                <span>Only Chosen Primes</span>
+                <div class="toggle-switch" id="sw-primedim-only"></div>
+            </div>
+            <div class="controls">
+                <button onclick="randomPrimeDimTriple()">Random Triple</button>
+            </div>
+        </div>
+
+        <div class="section-label">Number Theoretic Landscape</div>
+        <div class="toggle-row" onclick="toggleNTLMode()">
+            <span>Enable</span>
+            <div class="toggle-switch" id="sw-ntl"></div>
+        </div>
+        <div id="ntl-controls" style="display:none;">
+            <div class="section-label">Function</div>
+            <select id="ntl-func-select" onchange="setNTLFunc(this.value)" style="width:100%;margin-bottom:6px;">
+                <option value="d" selected>d(n) — Divisor count</option>
+                <option value="sigma_ratio">σ(n)/n — Abundance ratio</option>
+                <option value="omega">ω(n) — Distinct prime factors</option>
+                <option value="log_sigma">log σ(n)/n — Log abundance</option>
+                <option value="mobius">μ(n) — Möbius function</option>
+                <option value="phi">φ(n)/n — Totient ratio</option>
+            </select>
+            <div class="section-label">Height Scale: <span id="ntl-scale-val">1.0</span></div>
+            <input type="range" id="ntl-scale-slider" min="0.1" max="5.0" value="1.0" step="0.1" style="width:100%;cursor:pointer;margin-bottom:8px;">
+            <div class="toggle-row" onclick="toggleNTLPerfect()">
+                <span>Highlight Perfect</span>
+                <div class="toggle-switch" id="sw-ntl-perfect"></div>
+            </div>
+            <div class="toggle-row" onclick="toggleNTLHC()">
+                <span>Highlight Highly Composite</span>
+                <div class="toggle-switch" id="sw-ntl-hc"></div>
+            </div>
+        </div>
+
+        <div class="section-label">Sieve of Eratosthenes</div>
+        <div class="toggle-row" onclick="toggleSieveMode()">
+            <span>Enable</span>
+            <div class="toggle-switch" id="sw-sieve"></div>
+        </div>
+        <div id="sieve-controls" style="display:none;">
+            <div class="controls" style="margin-bottom:6px;">
+                <button id="sieve-play-btn" onclick="sievePlayPause()">▶ Play</button>
+                <button onclick="sieveStep()">Step</button>
+                <button onclick="sieveReset()">Reset</button>
+            </div>
+            <div class="section-label">Speed: <span id="sieve-speed-val">1.0x</span></div>
+            <input type="range" id="sieve-speed-slider" min="0.1" max="5.0" value="1.0" step="0.1" style="width:100%;cursor:pointer;margin-bottom:6px;">
+            <progress id="sieve-progress" max="100" value="0" style="width:100%;height:6px;margin-bottom:4px;accent-color:#00f2ff;"></progress>
+            <div id="sieve-stats" style="font-size:0.62rem;opacity:0.7;line-height:1.4;">Ready</div>
         </div>
 
         <div class="section-label">Filters & Visuals</div>
@@ -93,12 +302,14 @@
         <div class="section-label">Point Count: <span id="count-val">320,000</span></div>
         <input type="range" id="count-slider" min="100" max="320000" value="320000" step="100" style="width: 100%; cursor: pointer; margin-bottom: 10px;">
 
+        <div id="group-spacing">
         <div class="section-label">Lattice Spacing: <span id="spacing-val">65</span></div>
         <input type="range" id="spacing-slider" min="15" max="250" value="65" style="width: 100%; cursor: pointer;">
 
         <div id="stride-section" style="display:none;">
             <div class="section-label">Linear Stride: <span id="stride-val">Auto</span></div>
             <input type="range" id="stride-slider" min="0" max="200" value="0" step="1" style="width: 100%; cursor: pointer; margin-bottom: 10px;">
+        </div>
         </div>
 
         <div class="info">

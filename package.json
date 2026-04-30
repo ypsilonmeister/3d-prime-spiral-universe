@@ -1,0 +1,22 @@
+{
+  "name": "primespiral",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "vendor:three": "node ./scripts/vendor-three.mjs",
+    "postinstall": "node ./scripts/vendor-three.mjs",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.28.2",
+  "devDependencies": {
+    "@playwright/test": "^1.59.1"
+  },
+  "dependencies": {
+    "three": "0.167.0"
+  }
+}

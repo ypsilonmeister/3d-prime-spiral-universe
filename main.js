@@ -1,6 +1,30 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
+// --- Debounce / rAF-throttle helpers ---
+// rafThrottle: 重い計算用 — 連続入力中はpending値を上書きし、次のrAFで一度だけ実行
+function rafThrottle(fn) {
+    let pending = false;
+    let lastArgs = null;
+    return (...args) => {
+        lastArgs = args;
+        if (pending) return;
+        pending = true;
+        requestAnimationFrame(() => {
+            pending = false;
+            fn(...lastArgs);
+        });
+    };
+}
+// debounce: trailing edge — 入力が止まってから delay ms 後に1回だけ実行
+function debounce(fn, delay = 80) {
+    let timer = null;
+    return (...args) => {
+        if (timer !== null) clearTimeout(timer);
+        timer = setTimeout(() => { timer = null; fn(...args); }, delay);
+    };
+}
+
 // --- Configuration ---
 const MAX_POINTS = 320000;
 let activePointCount = 320000;
@@ -35,73 +59,120 @@ let ntlFunc = 'd';         // 'd' | 'sigma_ratio' | 'omega' | 'log_sigma' | 'mob
 let ntlScale = 1.0;        // height multiplier
 let ntlHighlightPerfect = false;
 let ntlHighlightHC = false;
-// Pre-computed tables (filled once in computeNTLTables)
-const ntl_d     = new Uint16Array(MAX_POINTS + 1);   // divisor count
-const ntl_sigma = new Float32Array(MAX_POINTS + 1);  // sigma / n  (ratio)
-const ntl_omega = new Uint8Array(MAX_POINTS + 1);    // distinct prime factors
-const ntl_mu    = new Int8Array(MAX_POINTS + 1);     // Mobius: -1/0/1
-const ntl_phi   = new Uint32Array(MAX_POINTS + 1);   // Euler totient
+// Pre-computed tables (filled by worker on startup; let so we can swap in transferred buffers)
+let ntl_d     = new Uint16Array(MAX_POINTS + 1);   // divisor count
+let ntl_sigma = new Float32Array(MAX_POINTS + 1);  // sigma / n  (ratio)
+let ntl_omega = new Uint8Array(MAX_POINTS + 1);    // distinct prime factors
+let ntl_mu    = new Int8Array(MAX_POINTS + 1);     // Mobius: -1/0/1
+let ntl_phi   = new Uint32Array(MAX_POINTS + 1);   // Euler totient
 const ntlOffsets = new Float32Array(MAX_POINTS);     // Z-axis offset per particle
 // Highly composite numbers up to 320000
 const HC_NUMBERS = new Set([1,2,4,6,12,24,36,48,60,120,180,240,360,720,840,1260,1680,2520,5040,7560,10080,15120,20160,25200,27720,45360,50400,55440,83160,110880,166320,221760,277200,332640]);
 const PERFECT_NUMBERS = new Set([6, 28, 496, 8128]);
 
-function computeNTLTables() {
-    // Sieve for divisor count and sigma (sum)
-    const sigmaSum = new Float64Array(MAX_POINTS + 1);
-    const divCount = new Uint16Array(MAX_POINTS + 1);
-    for (let d = 1; d <= MAX_POINTS; d++) {
-        for (let m = d; m <= MAX_POINTS; m += d) {
-            divCount[m]++;
-            sigmaSum[m] += d;
-        }
-    }
-    for (let n = 1; n <= MAX_POINTS; n++) {
-        ntl_d[n] = divCount[n];
-        ntl_sigma[n] = sigmaSum[n] / n;  // sigma/n ratio
-    }
+// --- Worker integration ---
+// Sieves and NTL tables are built off the main thread for snappy startup.
+// computeZetaOffsets is also delegated so slider input doesn't block the UI.
+let _worker = null;
+let _workerReady = false;
+let _zetaReqId = 0;
+let _zetaResolveLast = null;          // resolver for the latest in-flight zeta request
 
-    // Sieve for omega (distinct prime factors) and mu (Mobius)
-    // Start with mu[n]=1 for all, then sieve
-    for (let n = 1; n <= MAX_POINTS; n++) ntl_mu[n] = 1;
-    const smallestPrime = new Int32Array(MAX_POINTS + 1);
-    for (let i = 2; i <= MAX_POINTS; i++) {
-        if (smallestPrime[i] === 0) { // i is prime
-            for (let j = i; j <= MAX_POINTS; j += i) {
-                if (smallestPrime[j] === 0) smallestPrime[j] = i;
-            }
-        }
-    }
-    for (let n = 2; n <= MAX_POINTS; n++) {
-        let m = n, squareFree = true, cnt = 0;
-        while (m > 1) {
-            const p = smallestPrime[m];
-            let exp = 0;
-            while (m % p === 0) { m = (m / p) | 0; exp++; }
-            cnt++;
-            if (exp > 1) squareFree = false;
-        }
-        ntl_omega[n] = cnt;
-        ntl_mu[n] = squareFree ? (cnt % 2 === 0 ? 1 : -1) : 0;
-    }
+function _setBootStage(text, pct) {
+    const stage = document.getElementById('boot-stage');
+    const prog  = document.getElementById('boot-progress');
+    if (stage && text != null) stage.textContent = text;
+    if (prog  && pct   != null) prog.value = pct;
+}
+function _hideBootOverlay() {
+    const ov = document.getElementById('boot-overlay');
+    if (!ov) return;
+    ov.classList.add('hidden');
+    setTimeout(() => { ov.style.display = 'none'; }, 700);
+}
 
-    // Euler totient via sieve
-    for (let n = 0; n <= MAX_POINTS; n++) ntl_phi[n] = n;
-    for (let p = 2; p <= MAX_POINTS; p++) {
-        if (ntl_phi[p] === p) { // p is prime
-            for (let m = p; m <= MAX_POINTS; m += p) {
-                ntl_phi[m] -= (ntl_phi[m] / p) | 0;
-            }
-        }
+function applyPositionOverlays() {
+    const limit = Math.max(activePointCount, _maxRenderedCount);
+    for (let i = 0; i < limit; i++) {
+        targetPositions[i * 3]     = baseTargetPositions[i * 3];
+        targetPositions[i * 3 + 1] = baseTargetPositions[i * 3 + 1];
+        targetPositions[i * 3 + 2] = baseTargetPositions[i * 3 + 2] + zetaOffsets[i] + ntlOffsets[i];
     }
-    ntl_phi[1] = 1;
+    lerpActive = true;
+}
+
+function cancelPendingZetaRequests() {
+    _zetaReqId++;
+    if (_zetaResolveLast) {
+        _zetaResolveLast(false);
+        _zetaResolveLast = null;
+    }
+}
+
+function initWorker() {
+    return new Promise((resolve, reject) => {
+        _worker = new Worker('worker.js', { type: 'module' });
+        _worker.onerror = (e) => reject(e);
+        _worker.onmessage = (e) => {
+            const m = e.data;
+            if (m.type === 'progress') {
+                const stages = {
+                    primes:        ['Sieving primes',           0, 15],
+                    ntl_d_sigma:   ['Counting divisors',       15, 60],
+                    ntl_omega_mu:  ['Factoring (ω, μ)',         60, 88],
+                    ntl_phi:       ['Computing totient φ',     88, 98],
+                };
+                const s = stages[m.stage];
+                if (s) {
+                    const [label, lo, hi] = s;
+                    _setBootStage(label, lo + (hi - lo) * (m.pct / 100));
+                }
+            } else if (m.type === 'init_done') {
+                // Adopt transferred buffers
+                isPrimeArray = m.isPrime;
+                primeGaps    = m.gaps;
+                ntl_d        = m.ntl_d;
+                ntl_sigma    = m.ntl_sigma;
+                ntl_omega    = m.ntl_omega;
+                ntl_mu       = m.ntl_mu;
+                ntl_phi      = m.ntl_phi;
+                _workerReady = true;
+                resolve();
+            } else if (m.type === 'zeta_done') {
+                // Apply only if it's the latest request (drop stale results)
+                if (m.reqId === _zetaReqId) {
+                    zetaOffsets = m.offsets;
+                    if (_zetaResolveLast) { _zetaResolveLast(true); _zetaResolveLast = null; }
+                }
+            }
+        };
+        _worker.postMessage({ type: 'init', maxPoints: MAX_POINTS });
+    });
+}
+
+// Request a zeta offset recompute. Returns a promise that resolves when the latest request lands.
+// Older in-flight requests are abandoned (their reqId won't match).
+function requestZetaOffsets(N) {
+    if (_zetaResolveLast) {
+        _zetaResolveLast(false);
+        _zetaResolveLast = null;
+    }
+    _zetaReqId++;
+    const id = _zetaReqId;
+    return new Promise(resolve => {
+        _zetaResolveLast = ok => resolve(ok === true);
+        _worker.postMessage({
+            type: 'zeta', reqId: id,
+            N, amplitude: zetaAmplitude, spacing: currentSpacing,
+        });
+    });
 }
 
 function computeNTLOffsets() {
     if (!ntlModeActive) { ntlOffsets.fill(0); return; }
 
     let rawMax = 0;
-    for (let n = 1; n <= MAX_POINTS; n++) {
+    for (let n = 1; n <= activePointCount; n++) {
         let v;
         if      (ntlFunc === 'd')           v = ntl_d[n];
         else if (ntlFunc === 'sigma_ratio') v = ntl_sigma[n];
@@ -113,20 +184,17 @@ function computeNTLOffsets() {
         const a = Math.abs(v);
         if (a > rawMax) rawMax = a;
     }
+    // Zero-out any stale entries past activePointCount (keeps applyPositionOverlays clean)
+    ntlOffsets.fill(0, activePointCount);
 
     // Normalize to [0, spacing*scale] range so it's visually readable at any zoom
     const targetMax = currentSpacing * 25 * ntlScale;
     const norm = rawMax > 0 ? targetMax / rawMax : 1;
-    for (let i = 0; i < MAX_POINTS; i++) ntlOffsets[i] *= norm;
+    for (let i = 0; i < activePointCount; i++) ntlOffsets[i] *= norm;
 }
 
 function applyNTLOffsets() {
-    for (let i = 0; i < MAX_POINTS; i++) {
-        targetPositions[i * 3]     = baseTargetPositions[i * 3];
-        targetPositions[i * 3 + 1] = baseTargetPositions[i * 3 + 1];
-        targetPositions[i * 3 + 2] = baseTargetPositions[i * 3 + 2] + ntlOffsets[i];
-    }
-    lerpActive = true;
+    applyPositionOverlays();
 }
 
 // --- Sieve of Eratosthenes Animation ---
@@ -164,14 +232,18 @@ function _sieveReset() {
 }
 
 // Advance the sieve by exactly one "prime confirmation + start eliminating its multiples"
-// Returns true if a new prime was confirmed (used for step button)
+// Returns true if a new prime was confirmed (used for step button).
+// Writes visuals ONLY for cells whose state changed this step (dirty-cell update).
 function sieveAdvanceStep() {
     if (sieveFinished) return false;
 
-    // Eliminate all multiples of sieveCurrentP up to sieveLimit
+    // Eliminate all multiples of sieveCurrentP up to sieveLimit (dirty-write each)
     const p = sieveCurrentP;
     for (let m = sieveNextMultiple; m <= sieveLimit; m += p) {
-        if (sieveState[m] === 0) sieveState[m] = 2; // mark eliminated
+        if (sieveState[m] === 0) {
+            sieveState[m] = 2;
+            _sieveWriteCell(m);  // mark eliminated — dirty-write
+        }
     }
 
     // Find next prime candidate
@@ -181,7 +253,7 @@ function sieveAdvanceStep() {
     if (next > sieveLimit) {
         // Sieve complete — everything remaining unmarked is prime
         for (let n = 2; n <= sieveLimit; n++) {
-            if (sieveState[n] === 0) { sieveState[n] = 1; sieveFoundCount++; }
+            if (sieveState[n] === 0) { sieveState[n] = 1; sieveFoundCount++; _sieveWriteCell(n); }
         }
         sieveFinished = true;
         sievePlaying = false;
@@ -189,16 +261,17 @@ function sieveAdvanceStep() {
         return false;
     }
 
-    // Confirm next as prime
+    // Confirm next as prime (dirty-write)
     sieveState[next] = 1;
     sieveFoundCount++;
     sieveCurrentP = next;
-    sieveNextMultiple = next * 2;  // start from 2p (p² already covered by earlier steps would miss 2p etc.)
+    sieveNextMultiple = next * 2;
+    _sieveWriteCell(next);
 
     // Optimisation: if p > √sieveLimit all remaining unknowns are prime
     if (next * next > sieveLimit) {
         for (let n = next + 1; n <= sieveLimit; n++) {
-            if (sieveState[n] === 0) { sieveState[n] = 1; sieveFoundCount++; }
+            if (sieveState[n] === 0) { sieveState[n] = 1; sieveFoundCount++; _sieveWriteCell(n); }
         }
         sieveFinished = true;
         sievePlaying = false;
@@ -209,43 +282,34 @@ function sieveAdvanceStep() {
     return true;
 }
 
-function _sieveFlushVisuals() {
-    if (!sieveModeActive || !geometry) return;
+// Single-cell visual write — used by both dirty updates and the full flush
+const _sieveTmpColor = new THREE.Color();
+function _sieveWriteCell(n) {
+    if (!geometry) return;
+    const i = n - 1;
     const cols  = geometry.attributes.customColor.array;
     const sizes = geometry.attributes.size.array;
-    const color = new THREE.Color();
+    const alpha = sieveAlpha[n];
+    const state = sieveState[n];
+    const c = _sieveTmpColor;
 
-    for (let n = 1; n <= sieveLimit; n++) {
-        const i = n - 1;
-        const alpha = sieveAlpha[n];
-        const state = sieveState[n];
+    if (state === 2 && alpha <= 0.0) { sizes[i] = 0.0; }
+    else if (state === 1) { c.set(0xffd700); sizes[i] = 80.0; cols[i*3]=c.r*alpha; cols[i*3+1]=c.g*alpha; cols[i*3+2]=c.b*alpha; }
+    else if (state === 2) { c.setHSL(0.0, 0.9, 0.4 * alpha); sizes[i] = Math.max(0, 40.0 * alpha); cols[i*3]=c.r*alpha; cols[i*3+1]=c.g*alpha; cols[i*3+2]=c.b*alpha; }
+    else                  { c.setHSL(0.58, 0.6, 0.35); sizes[i] = 35.0; cols[i*3]=c.r*alpha; cols[i*3+1]=c.g*alpha; cols[i*3+2]=c.b*alpha; }
 
-        if (state === 2 && alpha <= 0.0) {
-            sizes[i] = 0.0;
-            continue;
-        }
+    geometry.attributes.customColor.needsUpdate = true;
+    geometry.attributes.size.needsUpdate = true;
+}
 
-        if (state === 1) {
-            // Confirmed prime — gold glow
-            color.set(0xffd700);
-            sizes[i] = 80.0;
-        } else if (state === 2) {
-            // Fading out composite — red shrinking
-            color.setHSL(0.0, 0.9, 0.4 * alpha);
-            sizes[i] = Math.max(0, 40.0 * alpha);
-        } else {
-            // Unknown — cool blue-grey candidate
-            color.setHSL(0.58, 0.6, 0.35);
-            sizes[i] = 35.0;
-        }
-        cols[i*3] = color.r * alpha;
-        cols[i*3+1] = color.g * alpha;
-        cols[i*3+2] = color.b * alpha;
-    }
+// Full flush: only used after a Reset / mode switch when all cells need to be repainted at once.
+// In normal play, sieveAdvanceStep + _sieveFadeStep update only changed cells.
+function _sieveFlushVisuals() {
+    if (!sieveModeActive || !geometry) return;
+    for (let n = 1; n <= sieveLimit; n++) _sieveWriteCell(n);
     // Hide particles beyond sieveLimit
-    for (let n = sieveLimit + 1; n <= MAX_POINTS; n++) {
-        sizes[n - 1] = 0.0;
-    }
+    const sizes = geometry.attributes.size.array;
+    for (let n = sieveLimit + 1; n <= MAX_POINTS; n++) sizes[n - 1] = 0.0;
     geometry.attributes.customColor.needsUpdate = true;
     geometry.attributes.size.needsUpdate = true;
 }
@@ -292,10 +356,7 @@ function sieveTick(dt) {
     }
 
     _sieveFadeStep();
-    if (dirty) {
-        _sieveFlushVisuals();
-        _sieveUpdateStats();
-    }
+    if (dirty) _sieveUpdateStats();
 }
 
 function _sieveFadeStep() {
@@ -336,7 +397,8 @@ let primeDimAxisLines = null;
 let primeDimAxisLabels = [];
 
 function computePadicValuations(p) {
-    for (let n = 1; n <= MAX_POINTS; n++) {
+    const lim = Math.max(activePointCount, _maxRenderedCount);
+    for (let n = 1; n <= lim; n++) {
         let m = n, v = 0;
         while (m % p === 0) { m = (m / p) | 0; v++; }
         padicVal[n] = v;
@@ -345,7 +407,8 @@ function computePadicValuations(p) {
 
 function computePrimeDimValuations() {
     const [px, py, pz] = primeDimP;
-    for (let n = 1; n <= MAX_POINTS; n++) {
+    const lim = Math.max(activePointCount, _maxRenderedCount);
+    for (let n = 1; n <= lim; n++) {
         let m, v;
         m = n; v = 0; while (m % px === 0) { m = (m / px) | 0; v++; } primeDimValX[n] = v;
         m = n; v = 0; while (m % py === 0) { m = (m / py) | 0; v++; } primeDimValY[n] = v;
@@ -357,7 +420,8 @@ function applyPrimeDimPositions() {
     const scale = currentSpacing * 15;
     const [px, py, pz] = primeDimP;
 
-    for (let n = 1; n <= MAX_POINTS; n++) {
+    const lim = Math.max(activePointCount, _maxRenderedCount);
+    for (let n = 1; n <= lim; n++) {
         const i = n - 1;
         const vx = primeDimValX[n];
         const vy = primeDimValY[n];
@@ -382,7 +446,7 @@ function applyPrimeDimPositions() {
         baseTargetPositions[i * 3 + 2] = z;
     }
 
-    for (let i = 0; i < MAX_POINTS * 3; i++) targetPositions[i] = baseTargetPositions[i];
+    { const lim = Math.max(activePointCount, _maxRenderedCount) * 3; for (let i = 0; i < lim; i++) targetPositions[i] = baseTargetPositions[i]; }
     lerpActive = true;
 }
 
@@ -447,10 +511,11 @@ function applyPadicPositions() {
     // Within each shell, arrange by spiral index to preserve angular structure.
     const scaleFactor = currentSpacing * 20;
 
-    // Group indices by valuation
+    // Group indices by valuation (only over the currently-active range)
+    const lim = Math.max(activePointCount, _maxRenderedCount);
     const maxV = Math.ceil(Math.log(MAX_POINTS) / Math.log(padicP));
     const shells = new Array(maxV + 1).fill(null).map(() => []);
-    for (let n = 1; n <= MAX_POINTS; n++) {
+    for (let n = 1; n <= lim; n++) {
         const v = Math.min(padicVal[n], maxV);
         shells[v].push(n - 1); // 0-based index
     }
@@ -462,9 +527,17 @@ function applyPadicPositions() {
         if (shell.length === 0) continue;
         const r = (Math.pow(padicP, -v)) * scaleFactor;
         const count = shell.length;
+        if (count === 1) {
+            // Single point on a shell — place on the +Y pole instead of dividing by zero
+            const idx = shell[0];
+            baseTargetPositions[idx * 3]     = 0;
+            baseTargetPositions[idx * 3 + 1] = r;
+            baseTargetPositions[idx * 3 + 2] = 0;
+            continue;
+        }
         for (let k = 0; k < count; k++) {
             const idx = shell[k];
-            const y = 1 - (k / (count - 1 || 1)) * 2;
+            const y = 1 - (k / (count - 1)) * 2;
             const rxy = Math.sqrt(Math.max(0, 1 - y * y));
             const angle = phi * k;
             baseTargetPositions[idx * 3]     = r * rxy * Math.cos(angle);
@@ -473,13 +546,8 @@ function applyPadicPositions() {
         }
     }
 
-    if (zetaModeActive) {
-        computeZetaOffsets(zetaZeroCount);
-        applyZetaOffsets();
-    } else {
-        for (let i = 0; i < MAX_POINTS * 3; i++) targetPositions[i] = baseTargetPositions[i];
-        lerpActive = true;
-    }
+    if (zetaModeActive) computeZetaOffsets(zetaZeroCount);
+    else applyPositionOverlays();
 }
 
 // --- Zeta Wave Mode ---
@@ -489,7 +557,7 @@ let zetaAmplitude = 1.0;    // amplitude scale
 let zetaAnimating = false;
 let zetaAnimFrame = null;
 const baseTargetPositions = new Float32Array(MAX_POINTS * 3); // lattice positions without zeta offset
-const zetaOffsets = new Float32Array(MAX_POINTS);             // Z-axis offset per particle
+let zetaOffsets = new Float32Array(MAX_POINTS);                // Z-axis offset per particle (replaced by worker)
 
 // First 100 non-trivial zeros of the Riemann zeta function (imaginary parts γ_n)
 // Source: Andrew Odlyzko's tables
@@ -516,49 +584,59 @@ const ZETA_ZEROS = [
     229.337413, 231.250189, 231.987235, 233.693404, 236.524230,
 ];
 
-// Pre-computed ln(x) and sqrt(x) cache to avoid repeated log/sqrt per slider change
-const _lnCache = new Float64Array(MAX_POINTS);
-const _sqrtCache = new Float64Array(MAX_POINTS);
-(function buildMathCache() {
-    for (let i = 0; i < MAX_POINTS; i++) {
-        const x = i + 1;
-        _lnCache[i] = Math.log(x);
-        _sqrtCache[i] = Math.sqrt(x);
-    }
-})();
-
-// Pre-computed per-zero denominator (constant for each γ)
-const _zetaDenom = new Float64Array(100);
-for (let k = 0; k < 100; k++) {
-    const g = ZETA_ZEROS[k];
-    _zetaDenom[k] = 0.25 + g * g;
-}
-
+// Zeta offset computation is delegated to the worker (see requestZetaOffsets).
+// This thin wrapper keeps the call sites synchronous-looking by issuing a request
+// and applying the result via applyZetaOffsets() once it lands. If the worker
+// is unavailable (fallback path), we compute synchronously here.
 function computeZetaOffsets(N) {
     if (!zetaModeActive || N === 0) {
+        cancelPendingZetaRequests();
         zetaOffsets.fill(0);
+        applyZetaOffsets();
         return;
     }
-    // For each x=n, compute sum of 2·Re(x^ρ/ρ) over k=0..N-1
-    // Re(x^ρ/ρ) = sqrt(x) * [cos(γ·ln(x))*(1/2) + sin(γ·ln(x))*γ] / (1/4 + γ²)
+    if (_workerReady) {
+        const requestedN = N;
+        requestZetaOffsets(N).then(applied => {
+            // Drop the result if any of the following changed while we were waiting:
+            //   - zeta turned off (cancelPendingZetaRequests already handles this, but double-check)
+            //   - the slider moved on (a newer request supersedes us — applied will be false)
+            //   - p-adic / primeDim took ownership of positions (zeta has no slot to occupy)
+            if (!applied) return;
+            if (!zetaModeActive) return;
+            if (zetaZeroCount !== requestedN) return;
+            if (padicModeActive || primeDimModeActive) return;
+            applyZetaOffsets();
+        });
+    } else {
+        _computeZetaSyncFallback(N);
+        applyZetaOffsets();
+    }
+}
+
+// Pre-built only when fallback is taken (still cheap to build on demand)
+let _zetaSyncCachesBuilt = false;
+let _lnCacheSync = null, _sqrtCacheSync = null, _zetaDenomSync = null;
+function _computeZetaSyncFallback(N) {
+    if (!_zetaSyncCachesBuilt) {
+        _lnCacheSync = new Float64Array(MAX_POINTS);
+        _sqrtCacheSync = new Float64Array(MAX_POINTS);
+        for (let i = 0; i < MAX_POINTS; i++) { _lnCacheSync[i] = Math.log(i+1); _sqrtCacheSync[i] = Math.sqrt(i+1); }
+        _zetaDenomSync = new Float64Array(100);
+        for (let k = 0; k < 100; k++) { const g = ZETA_ZEROS[k]; _zetaDenomSync[k] = 0.25 + g*g; }
+        _zetaSyncCachesBuilt = true;
+    }
     for (let i = 0; i < MAX_POINTS; i++) {
-        const lnx   = _lnCache[i];
-        const sqrtx = _sqrtCache[i];
+        const lnx = _lnCacheSync[i], sqrtx = _sqrtCacheSync[i];
         let sum = 0;
         for (let k = 0; k < N; k++) {
-            const g = ZETA_ZEROS[k];
-            const angle = g * lnx;
-            sum += sqrtx * (Math.cos(angle) * 0.5 + Math.sin(angle) * g) / _zetaDenom[k];
+            const g = ZETA_ZEROS[k]; const angle = g * lnx;
+            sum += sqrtx * (Math.cos(angle) * 0.5 + Math.sin(angle) * g) / _zetaDenomSync[k];
         }
         zetaOffsets[i] = -2.0 * sum;
     }
-
-    // Normalize so visual scale stays consistent regardless of N
     let maxAbs = 0;
-    for (let i = 0; i < MAX_POINTS; i++) {
-        const a = Math.abs(zetaOffsets[i]);
-        if (a > maxAbs) maxAbs = a;
-    }
+    for (let i = 0; i < MAX_POINTS; i++) { const a = Math.abs(zetaOffsets[i]); if (a > maxAbs) maxAbs = a; }
     if (maxAbs > 0) {
         const scale = (currentSpacing * 8.0 * zetaAmplitude) / maxAbs;
         for (let i = 0; i < MAX_POINTS; i++) zetaOffsets[i] *= scale;
@@ -566,18 +644,15 @@ function computeZetaOffsets(N) {
 }
 
 function applyZetaOffsets() {
-    for (let i = 0; i < MAX_POINTS; i++) {
-        targetPositions[i * 3]     = baseTargetPositions[i * 3];
-        targetPositions[i * 3 + 1] = baseTargetPositions[i * 3 + 1];
-        targetPositions[i * 3 + 2] = baseTargetPositions[i * 3 + 2] + zetaOffsets[i];
-    }
-    lerpActive = true;
+    applyPositionOverlays();
 }
 
 // --- State ---
 let scene, camera, cameraL, cameraR, renderer, controls, points, geometry;
-const isPrimeArray = new Uint8Array(MAX_POINTS + 1);
-const primeGaps = new Uint8Array(MAX_POINTS + 2);
+// isPrimeArray and primeGaps are populated by the worker on startup; mutable so we
+// can adopt the transferred buffers without copying.
+let isPrimeArray = new Uint8Array(MAX_POINTS + 1);
+let primeGaps = new Uint8Array(MAX_POINTS + 2);
 // numberType[n] = category key string (assigned in classifyNumbers)
 const numberType = new Array(MAX_POINTS + 1);
 let lastTapTime = 0;
@@ -589,6 +664,18 @@ let vrSupported = false;
 // --- Lerp state ---
 let lerpActive = true;
 let growUICounter = 0;
+
+// Remember the largest activePointCount we've drawn to so we know the range
+// of `sizes` slots that may still hold non-zero values from a previous frame.
+// When activePointCount shrinks, we only need to clear [activePointCount, _maxRenderedCount).
+let _maxRenderedCount = 0;
+function _clearAboveActive() {
+    if (!geometry) return;
+    if (_maxRenderedCount <= activePointCount) { _maxRenderedCount = activePointCount; return; }
+    const sizes = geometry.attributes.size.array;
+    for (let i = activePointCount; i < _maxRenderedCount; i++) sizes[i] = 0.0;
+    _maxRenderedCount = activePointCount;
+}
 
 // ---------------------------------------------------------------------------
 // Number type definitions
@@ -675,12 +762,8 @@ for (const t of NUMBER_TYPES) typeVisibility[t.key] = t.defaultOn;
 const typeMap = {};
 for (const t of NUMBER_TYPES) typeMap[t.key] = t;
 
-// pre-resolved per-particle type def and color cache
+// pre-resolved per-particle type def
 const particleTypeDef = new Array(MAX_POINTS + 1); // set in classifyNumbers
-const cachedR = new Float32Array(MAX_POINTS);
-const cachedG = new Float32Array(MAX_POINTS);
-const cachedB = new Float32Array(MAX_POINTS);
-const cachedSize = new Float32Array(MAX_POINTS);
 
 // ---------------------------------------------------------------------------
 // Classify every number once after sieve
@@ -726,24 +809,24 @@ function init() {
         });
     }
 
-    generatePrimes(MAX_POINTS);
-    computeNTLTables();
+    // Sieves and NTL tables are computed on the worker (already kicked off in main entrypoint).
+    // We arrive here only after _workerReady is true, so isPrimeArray / ntl_* are populated.
     classifyNumbers();
     buildTypeUI();
     createParticles();
 
     window.addEventListener('resize', onWindowResize);
     window.addEventListener('keydown', (e) => {
-        if (e.key.toLowerCase() === 'h') toggleUI();
-        if (e.key.toLowerCase() === 'c') centerOne();
-        if (e.key.toLowerCase() === 'g') toggleAutoGrow();
+        if (e.key.toLowerCase() === 'h') window.toggleUI();
+        if (e.key.toLowerCase() === 'c') window.centerOne();
+        if (e.key.toLowerCase() === 'g') window.toggleAutoGrow();
     });
 
     window.addEventListener('touchstart', (e) => {
-        if (e.touches.length >= 3) { toggleUI(); return; }
+        if (e.touches.length >= 3) { window.toggleUI(); return; }
         if (e.touches.length > 1) return;
         const currentTime = new Date().getTime();
-        if (currentTime - lastTapTime < 300) toggleUI();
+        if (currentTime - lastTapTime < 300) window.toggleUI();
         lastTapTime = currentTime;
     }, { passive: true });
 
@@ -790,24 +873,27 @@ function init() {
                 clearTimeout(zetaAnimFrame);
                 document.getElementById('zeta-anim-btn').textContent = 'Animate';
             }
+            cancelPendingZetaRequests();
             zetaOffsets.fill(0);
-            for (let i = 0; i < MAX_POINTS * 3; i++) targetPositions[i] = baseTargetPositions[i];
-            lerpActive = true;
+            applyPositionOverlays();
         }
     };
 
+    const recomputeZeta = rafThrottle(() => {
+        if (zetaModeActive) { computeZetaOffsets(zetaZeroCount); applyZetaOffsets(); }
+    });
     const zetaNSlider = document.getElementById('zeta-n-slider');
     zetaNSlider.addEventListener('input', (e) => {
         zetaZeroCount = parseInt(e.target.value);
         document.getElementById('zeta-n-val').innerText = zetaZeroCount;
-        if (zetaModeActive) { computeZetaOffsets(zetaZeroCount); applyZetaOffsets(); }
+        recomputeZeta();
     });
 
     const zetaAmpSlider = document.getElementById('zeta-amp-slider');
     zetaAmpSlider.addEventListener('input', (e) => {
         zetaAmplitude = parseFloat(e.target.value);
         document.getElementById('zeta-amp-val').innerText = zetaAmplitude.toFixed(1);
-        if (zetaModeActive) { computeZetaOffsets(zetaZeroCount); applyZetaOffsets(); }
+        recomputeZeta();
     });
 
     window.animateZeta = () => {
@@ -983,8 +1069,7 @@ function init() {
             updateNTLVisuals();
         } else {
             ntlOffsets.fill(0);
-            for (let i = 0; i < MAX_POINTS * 3; i++) targetPositions[i] = baseTargetPositions[i];
-            lerpActive = true;
+            applyPositionOverlays();
             updateParticleVisuals();
         }
     };
@@ -1010,10 +1095,13 @@ function init() {
         if (ntlModeActive) updateNTLVisuals();
     };
 
+    const recomputeNTL = rafThrottle(() => {
+        if (ntlModeActive) { computeNTLOffsets(); applyNTLOffsets(); }
+    });
     document.getElementById('ntl-scale-slider').addEventListener('input', (e) => {
         ntlScale = parseFloat(e.target.value);
         document.getElementById('ntl-scale-val').innerText = ntlScale.toFixed(1);
-        if (ntlModeActive) { computeNTLOffsets(); applyNTLOffsets(); }
+        recomputeNTL();
     });
 
     // Sieve Animation controls
@@ -1052,8 +1140,7 @@ function init() {
     window.sieveStep = () => {
         if (!sieveModeActive || sieveFinished) return;
         sievePlaying = false;
-        sieveAdvanceStep();
-        _sieveFlushVisuals();
+        sieveAdvanceStep();  // already dirty-writes via _sieveWriteCell — no full flush needed
         _sieveUpdateStats();
         _sieveUpdateUI();
     };
@@ -1070,26 +1157,51 @@ function init() {
         document.getElementById('sieve-speed-val').innerText = sieveSpeed.toFixed(1) + 'x';
     });
 
+    // Spacing recomputes lattice positions — heavy, throttle by rAF
+    const recomputeLattice = rafThrottle(() => calculateTargetPositions());
     const sSlider = document.getElementById('spacing-slider');
     sSlider.addEventListener('input', (e) => {
         currentSpacing = parseInt(e.target.value);
         document.getElementById('spacing-val').innerText = currentSpacing;
-        calculateTargetPositions();
+        recomputeLattice();
     });
 
+    // Count slider only affects per-particle visibility; rAF-throttle the visual update.
+    // If a position-owning mode (padic / primeDim) is active, the new range needs its
+    // valuations recomputed before visuals can render correctly.
+    const recomputeOnCountChange = rafThrottle(() => {
+        if (padicModeActive) {
+            computePadicValuations(padicP);
+            applyPadicPositions();
+            updatePadicColorVisuals();
+        } else if (primeDimModeActive) {
+            computePrimeDimValuations();
+            applyPrimeDimPositions();
+            updatePrimeDimVisuals();
+        } else if (ntlModeActive) {
+            computeNTLOffsets();
+            applyNTLOffsets();
+            updateNTLVisuals();
+        } else {
+            updateParticleVisuals();
+        }
+    });
     const cSlider = document.getElementById('count-slider');
     cSlider.addEventListener('input', (e) => {
         activePointCount = parseInt(e.target.value);
         autoGrow = false;
-        updateUI();
-        updateParticleVisuals();
+        // labels are cheap, update immediately so UI stays responsive
+        document.getElementById('count-val').innerText = activePointCount.toLocaleString();
+        document.getElementById('range-info').innerText = `1 - ${activePointCount.toLocaleString()}`;
+        document.getElementById('sw-autogrow').classList.toggle('on', autoGrow);
+        recomputeOnCountChange();
     });
 
     const strideSlider = document.getElementById('stride-slider');
     strideSlider.addEventListener('input', (e) => {
         linearStride = parseInt(e.target.value);
         document.getElementById('stride-val').innerText = linearStride <= 0 ? 'Auto' : linearStride;
-        calculateTargetPositions();
+        recomputeLattice();
     });
 
     calculateTargetPositions();
@@ -1122,19 +1234,6 @@ function updateTypeUI() {
         const sw = document.getElementById(`sw-type-${t.key}`);
         if (sw) sw.classList.toggle('on', !!typeVisibility[t.key]);
     }
-}
-
-// ---------------------------------------------------------------------------
-// Sieve
-// ---------------------------------------------------------------------------
-function generatePrimes(n) {
-    isPrimeArray.fill(1);
-    isPrimeArray[0] = isPrimeArray[1] = 0;
-    for (let i = 2; i * i <= n; i++)
-        if (isPrimeArray[i]) for (let j = i * i; j <= n; j += i) isPrimeArray[j] = 0;
-    let prev = 2;
-    for (let i = 3; i <= n; i++)
-        if (isPrimeArray[i]) { primeGaps[prev] = Math.min(i - prev, 255); prev = i; }
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,9 +1320,8 @@ function updatePadicColorVisuals() {
     const color = new THREE.Color();
     const maxV = Math.ceil(Math.log(MAX_POINTS) / Math.log(padicP));
 
-    for (let n = 1; n <= MAX_POINTS; n++) {
+    for (let n = 1; n <= activePointCount; n++) {
         const i = n - 1;
-        if (n > activePointCount) { sizes[i] = 0.0; continue; }
         if (!isCompositeVisible(n)) { sizes[i] = 0.0; continue; }
 
         const v = Math.min(padicVal[n], maxV);
@@ -1240,6 +1338,7 @@ function updatePadicColorVisuals() {
         }
         cols[i*3] = color.r; cols[i*3+1] = color.g; cols[i*3+2] = color.b;
     }
+    _clearAboveActive();
     geometry.attributes.customColor.needsUpdate = true;
     geometry.attributes.size.needsUpdate = true;
 }
@@ -1252,18 +1351,17 @@ function updateNTLVisuals() {
     const sizes = geometry.attributes.size.array;
     const color = new THREE.Color();
 
-    // Compute per-particle raw value for color mapping
+    // Compute per-particle raw value for color mapping (only over active range)
     let rawMin = Infinity, rawMax = -Infinity;
-    for (let n = 1; n <= MAX_POINTS; n++) {
+    for (let n = 1; n <= activePointCount; n++) {
         const v = _ntlRawValue(n);
         if (v < rawMin) rawMin = v;
         if (v > rawMax) rawMax = v;
     }
     const rawRange = rawMax - rawMin || 1;
 
-    for (let n = 1; n <= MAX_POINTS; n++) {
+    for (let n = 1; n <= activePointCount; n++) {
         const i = n - 1;
-        if (n > activePointCount) { sizes[i] = 0.0; continue; }
         if (!isCompositeVisible(n)) { sizes[i] = 0.0; continue; }
 
         const raw = _ntlRawValue(n);
@@ -1299,6 +1397,7 @@ function updateNTLVisuals() {
         }
         cols[i*3] = color.r; cols[i*3+1] = color.g; cols[i*3+2] = color.b;
     }
+    _clearAboveActive();
     geometry.attributes.customColor.needsUpdate = true;
     geometry.attributes.size.needsUpdate = true;
 }
@@ -1323,9 +1422,8 @@ function updatePrimeDimVisuals() {
     const color = new THREE.Color();
     const [px, py, pz] = primeDimP;
 
-    for (let n = 1; n <= MAX_POINTS; n++) {
+    for (let n = 1; n <= activePointCount; n++) {
         const i = n - 1;
-        if (n > activePointCount) { sizes[i] = 0.0; continue; }
 
         const vx = primeDimValX[n];
         const vy = primeDimValY[n];
@@ -1362,6 +1460,7 @@ function updatePrimeDimVisuals() {
         }
         cols[i*3] = color.r; cols[i*3+1] = color.g; cols[i*3+2] = color.b;
     }
+    _clearAboveActive();
     geometry.attributes.customColor.needsUpdate = true;
     geometry.attributes.size.needsUpdate = true;
 }
@@ -1387,14 +1486,6 @@ function updateParticleVisuals() {
     const sizes = geometry.attributes.size.array;
     const color = new THREE.Color(); // reused, no allocation per iteration
 
-    let maxDepth = 1;
-    if (colorMode === 'depth') {
-        for (let i = 0; i < activePointCount; i++) {
-            const d = Math.sqrt(targetPositions[i*3]**2 + targetPositions[i*3+1]**2 + targetPositions[i*3+2]**2);
-            if (d > maxDepth) maxDepth = d;
-        }
-    }
-
     // Pre-parse type colors into RGB floats once per call
     const typeRGB = {};
     for (const t of NUMBER_TYPES) {
@@ -1403,10 +1494,22 @@ function updateParticleVisuals() {
     }
 
     const isTypes = colorMode === 'types';
+    const isDepth = colorMode === 'depth';
 
-    for (let n = 1; n <= MAX_POINTS; n++) {
+    // For 'depth' mode we need maxDepth — compute in a single pass alongside the main loop
+    // by deferring depth coloring to a second mini-pass; cheaper than the previous double-pass
+    // when activePointCount is small.
+    let maxDepth = 1;
+    if (isDepth) {
+        for (let i = 0; i < activePointCount; i++) {
+            const d2 = targetPositions[i*3]**2 + targetPositions[i*3+1]**2 + targetPositions[i*3+2]**2;
+            if (d2 > maxDepth) maxDepth = d2;
+        }
+        maxDepth = Math.sqrt(maxDepth);
+    }
+
+    for (let n = 1; n <= activePointCount; n++) {
         const i = n - 1;
-        if (n > activePointCount) { sizes[i] = 0.0; continue; }
 
         if (!isCompositeVisible(n)) { sizes[i] = 0.0; continue; }
 
@@ -1439,7 +1542,7 @@ function updateParticleVisuals() {
                     const g = primeGaps[n] || 2;
                     color.setHSL((1.0 - Math.min(g, 72) / 72) * 0.65, 1.0, 0.6);
                 }
-                else if (colorMode === 'depth') {
+                else if (isDepth) {
                     const dx=targetPositions[i*3], dy=targetPositions[i*3+1], dz=targetPositions[i*3+2];
                     color.setHSL(0.55 + (Math.sqrt(dx*dx+dy*dy+dz*dz) / maxDepth) * 0.45, 1.0, 0.6);
                 }
@@ -1450,6 +1553,7 @@ function updateParticleVisuals() {
             cols[i*3] = color.r; cols[i*3+1] = color.g; cols[i*3+2] = color.b;
         }
     }
+    _clearAboveActive();
     geometry.attributes.customColor.needsUpdate = true;
     geometry.attributes.size.needsUpdate = true;
 }
@@ -1457,109 +1561,137 @@ function updateParticleVisuals() {
 // ---------------------------------------------------------------------------
 // Target positions
 // ---------------------------------------------------------------------------
+// Cache the *unscaled* candidate ordering as a flat Float32Array (xyz interleaved).
+// Spacing changes only multiply, so we keep this around as long as layout/fillMode/stride
+// don't change. Switching layouts discards the previous array — no multi-layout cache.
+let _candidateCacheKey = '';
+let _candidateCacheFlat = null;
+let _candidateCacheLen = 0;
+
 function calculateTargetPositions() {
-    let candidates = [];
-    let range = 45;
-    if (currentLayout === 'tetra' || currentLayout === 'rhombic') range = 58;
-    if (currentLayout === 'triangular') range = 62;
-    if (currentLayout === 'omnitruncated') range = 36;
-    if (currentLayout === 'gyroid') range = 55;
+    const cacheKey = `${currentLayout}|${currentFillMode}|${linearStride}`;
+    if (cacheKey !== _candidateCacheKey || !_candidateCacheFlat) {
+        let candidates = [];
+        let range = 45;
+        if (currentLayout === 'tetra' || currentLayout === 'rhombic') range = 58;
+        if (currentLayout === 'triangular') range = 62;
+        if (currentLayout === 'omnitruncated') range = 36;
+        if (currentLayout === 'gyroid') range = 55;
 
-    if (currentLayout === 'cube') {
-        for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) candidates.push({x,y,z});
-    } else if (currentLayout === 'hexagonal' || currentLayout === 'triangular') {
-        const s3=Math.sqrt(3);
-        for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) candidates.push({x:x+(Math.abs(y)%2)*0.5,y:y*(s3/2),z});
-    } else if (currentLayout === 'octahedral' || currentLayout === 'bitruncated') {
-        for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) { candidates.push({x,y,z}); candidates.push({x:x+0.5,y:y+0.5,z:z+0.5}); }
-    } else if (currentLayout === 'tetra' || currentLayout === 'rhombic') {
-        for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) if(Math.abs(x+y+z)%2===0) candidates.push({x,y,z});
-    } else if (currentLayout === 'omnitruncated') {
-        for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) { candidates.push({x:x*2,y:y*2,z:z*2}); candidates.push({x:x*2+1,y:y*2+1,z:z*2+1}); }
-    } else if (currentLayout === 'aperiodic') {
-        for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) {
-            const s=(x*123+y*456+z*789);
-            candidates.push({x:x+Math.sin(s)*0.5,y:y+Math.cos(s)*0.5,z:z+Math.sin(s*0.5)*0.5});
+        if (currentLayout === 'cube') {
+            for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) candidates.push({x,y,z});
+        } else if (currentLayout === 'hexagonal' || currentLayout === 'triangular') {
+            const s3=Math.sqrt(3);
+            for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) candidates.push({x:x+(Math.abs(y)%2)*0.5,y:y*(s3/2),z});
+        } else if (currentLayout === 'octahedral' || currentLayout === 'bitruncated') {
+            for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) { candidates.push({x,y,z}); candidates.push({x:x+0.5,y:y+0.5,z:z+0.5}); }
+        } else if (currentLayout === 'tetra' || currentLayout === 'rhombic') {
+            for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) if(Math.abs(x+y+z)%2===0) candidates.push({x,y,z});
+        } else if (currentLayout === 'omnitruncated') {
+            for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) { candidates.push({x:x*2,y:y*2,z:z*2}); candidates.push({x:x*2+1,y:y*2+1,z:z*2+1}); }
+        } else if (currentLayout === 'aperiodic') {
+            for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) {
+                const s=(x*123+y*456+z*789);
+                candidates.push({x:x+Math.sin(s)*0.5,y:y+Math.cos(s)*0.5,z:z+Math.sin(s*0.5)*0.5});
+            }
+        } else if (currentLayout === 'hcp') {
+            const s3=Math.sqrt(3),cz=Math.sqrt(2/3);
+            for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) {
+                const even=(Math.abs(z)%2===0);
+                candidates.push({x:x+(Math.abs(y)%2)*0.5+(even?0:0.5),y:y*(s3/2)+(even?0:s3/6),z:z*cz});
+            }
+        } else if (currentLayout === 'diamond_c') {
+            for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) {
+                if(Math.abs(x+y+z)%2===0) { candidates.push({x,y,z}); candidates.push({x:x+0.5,y:y+0.5,z:z+0.5}); }
+            }
+        } else if (currentLayout === 'gyroid') {
+            const sc=0.3;
+            for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) {
+                const f=Math.abs(Math.sin(x*sc)*Math.cos(y*sc)+Math.sin(y*sc)*Math.cos(z*sc)+Math.sin(z*sc)*Math.cos(x*sc));
+                if(f<0.5) candidates.push({x,y,z});
+            }
         }
-    } else if (currentLayout === 'hcp') {
-        const s3=Math.sqrt(3),cz=Math.sqrt(2/3);
-        for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) {
-            const even=(Math.abs(z)%2===0);
-            candidates.push({x:x+(Math.abs(y)%2)*0.5+(even?0:0.5),y:y*(s3/2)+(even?0:s3/6),z:z*cz});
+
+        if      (currentFillMode==='shell')   candidates.sort((a,b)=>(a.x*a.x+a.y*a.y+a.z*a.z)-(b.x*b.x+b.y*b.y+b.z*b.z));
+        else if (currentFillMode==='cubic')   candidates.sort((a,b)=>Math.max(Math.abs(a.x),Math.abs(a.y),Math.abs(a.z))-Math.max(Math.abs(b.x),Math.abs(b.y),Math.abs(b.z)));
+        else if (currentFillMode==='diamond') candidates.sort((a,b)=>(Math.abs(a.x)+Math.abs(a.y)+Math.abs(a.z))-(Math.abs(b.x)+Math.abs(b.y)+Math.abs(b.z)));
+        else if (currentFillMode==='linear') {
+            if (linearStride<=0) {
+                candidates.sort((a,b)=>(a.z-b.z)||(a.y-b.y)||(a.x-b.x));
+            } else {
+                const W=linearStride;
+                const xMin=candidates.reduce((m,c)=>Math.min(m,c.x),Infinity);
+                candidates.sort((a,b)=>{
+                    if(a.z!==b.z) return a.z-b.z;
+                    const sA=Math.floor((a.x-xMin)/W), sB=Math.floor((b.x-xMin)/W);
+                    if(sA!==sB) return sA-sB;
+                    if(a.y!==b.y) return a.y-b.y;
+                    return a.x-b.x;
+                });
+            }
         }
-    } else if (currentLayout === 'diamond_c') {
-        for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) {
-            if(Math.abs(x+y+z)%2===0) { candidates.push({x,y,z}); candidates.push({x:x+0.5,y:y+0.5,z:z+0.5}); }
+        else if (currentFillMode==='vortex')  candidates.sort((a,b)=>(Math.abs(a.z-b.z)>0.5?a.z-b.z:Math.atan2(a.y,a.x)-Math.atan2(b.y,b.x)));
+        else if (currentFillMode==='outside') candidates.sort((a,b)=>(b.x*b.x+b.y*b.y+b.z*b.z)-(a.x*a.x+a.y*a.y+a.z*a.z));
+        else if (currentFillMode==='zorder') {
+            let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity,z0=Infinity,z1=-Infinity;
+            for(const c of candidates){if(c.x<x0)x0=c.x;if(c.x>x1)x1=c.x;if(c.y<y0)y0=c.y;if(c.y>y1)y1=c.y;if(c.z<z0)z0=c.z;if(c.z>z1)z1=c.z;}
+            const scl=255/Math.max(x1-x0,y1-y0,z1-z0,1);
+            for(const c of candidates){
+                const ix=Math.round((c.x-x0)*scl),iy=Math.round((c.y-y0)*scl),iz=Math.round((c.z-z0)*scl);
+                let m=0; for(let i=0;i<8;i++) m|=((ix>>i&1)<<(3*i))|((iy>>i&1)<<(3*i+1))|((iz>>i&1)<<(3*i+2));
+                c._m=m;
+            }
+            candidates.sort((a,b)=>a._m-b._m);
         }
-    } else if (currentLayout === 'gyroid') {
-        const sc=0.3;
-        for(let x=-range;x<=range;x++) for(let y=-range;y<=range;y++) for(let z=-range;z<=range;z++) {
-            const f=Math.abs(Math.sin(x*sc)*Math.cos(y*sc)+Math.sin(y*sc)*Math.cos(z*sc)+Math.sin(z*sc)*Math.cos(x*sc));
-            if(f<0.5) candidates.push({x,y,z});
+        else if (currentFillMode==='modular') {
+            const M=6,bkts=Array.from({length:M},()=>[]);
+            for(const c of candidates) bkts[Math.floor(((Math.atan2(c.y,c.x)+Math.PI)/(2*Math.PI))*M)%M].push(c);
+            const d2=c=>c.x*c.x+c.y*c.y+c.z*c.z;
+            for(const b of bkts) b.sort((a,b)=>d2(a)-d2(b));
+            candidates=[];
+            const ml=Math.max(...bkts.map(b=>b.length));
+            for(let k=0;k<ml;k++) for(let r=0;r<M;r++) if(k<bkts[r].length) candidates.push(bkts[r][k]);
         }
+
+        // Flatten to Float32Array — spacing changes will then be a tight multiply loop.
+        // Cap at MAX_POINTS so we don't waste memory on the long tail of unused candidates.
+        const cap = Math.min(candidates.length, MAX_POINTS);
+        const flat = new Float32Array(cap * 3);
+        for (let i = 0; i < cap; i++) {
+            const c = candidates[i];
+            flat[i*3] = c.x; flat[i*3+1] = c.y; flat[i*3+2] = c.z;
+        }
+        _candidateCacheKey = cacheKey;
+        _candidateCacheFlat = flat;
+        _candidateCacheLen = cap;
+        candidates = null;  // help GC drop the object array
     }
 
-    if      (currentFillMode==='shell')   candidates.sort((a,b)=>(a.x*a.x+a.y*a.y+a.z*a.z)-(b.x*b.x+b.y*b.y+b.z*b.z));
-    else if (currentFillMode==='cubic')   candidates.sort((a,b)=>Math.max(Math.abs(a.x),Math.abs(a.y),Math.abs(a.z))-Math.max(Math.abs(b.x),Math.abs(b.y),Math.abs(b.z)));
-    else if (currentFillMode==='diamond') candidates.sort((a,b)=>(Math.abs(a.x)+Math.abs(a.y)+Math.abs(a.z))-(Math.abs(b.x)+Math.abs(b.y)+Math.abs(b.z)));
-    else if (currentFillMode==='linear') {
-        if (linearStride<=0) {
-            candidates.sort((a,b)=>(a.z-b.z)||(a.y-b.y)||(a.x-b.x));
-        } else {
-            const W=linearStride;
-            const xMin=candidates.reduce((m,c)=>Math.min(m,c.x),Infinity);
-            candidates.sort((a,b)=>{
-                if(a.z!==b.z) return a.z-b.z;
-                const sA=Math.floor((a.x-xMin)/W), sB=Math.floor((b.x-xMin)/W);
-                if(sA!==sB) return sA-sB;
-                if(a.y!==b.y) return a.y-b.y;
-                return a.x-b.x;
-            });
-        }
+    // Only fill base positions up to the current active range (+ any previously-rendered slack
+    // so shrinking activePointCount doesn't leave stale lerp targets). On a spacing change we
+    // hit this hot path with the cached flat array — just a multiply, no object access.
+    const baseLim = Math.min(Math.max(activePointCount, _maxRenderedCount), _candidateCacheLen);
+    const flat = _candidateCacheFlat;
+    const s = currentSpacing;
+    for (let i = 0; i < baseLim * 3; i++) {
+        baseTargetPositions[i] = flat[i] * s;
     }
-    else if (currentFillMode==='vortex')  candidates.sort((a,b)=>(Math.abs(a.z-b.z)>0.5?a.z-b.z:Math.atan2(a.y,a.x)-Math.atan2(b.y,b.x)));
-    else if (currentFillMode==='outside') candidates.sort((a,b)=>(b.x*b.x+b.y*b.y+b.z*b.z)-(a.x*a.x+a.y*a.y+a.z*a.z));
-    else if (currentFillMode==='zorder') {
-        let x0=Infinity,x1=-Infinity,y0=Infinity,y1=-Infinity,z0=Infinity,z1=-Infinity;
-        for(const c of candidates){if(c.x<x0)x0=c.x;if(c.x>x1)x1=c.x;if(c.y<y0)y0=c.y;if(c.y>y1)y1=c.y;if(c.z<z0)z0=c.z;if(c.z>z1)z1=c.z;}
-        const scl=255/Math.max(x1-x0,y1-y0,z1-z0,1);
-        for(const c of candidates){
-            const ix=Math.round((c.x-x0)*scl),iy=Math.round((c.y-y0)*scl),iz=Math.round((c.z-z0)*scl);
-            let m=0; for(let i=0;i<8;i++) m|=((ix>>i&1)<<(3*i))|((iy>>i&1)<<(3*i+1))|((iz>>i&1)<<(3*i+2));
-            c._m=m;
-        }
-        candidates.sort((a,b)=>a._m-b._m);
-    }
-    else if (currentFillMode==='modular') {
-        const M=6,bkts=Array.from({length:M},()=>[]);
-        for(const c of candidates) bkts[Math.floor(((Math.atan2(c.y,c.x)+Math.PI)/(2*Math.PI))*M)%M].push(c);
-        const d2=c=>c.x*c.x+c.y*c.y+c.z*c.z;
-        for(const b of bkts) b.sort((a,b)=>d2(a)-d2(b));
-        candidates=[];
-        const ml=Math.max(...bkts.map(b=>b.length));
-        for(let k=0;k<ml;k++) for(let r=0;r<M;r++) if(k<bkts[r].length) candidates.push(bkts[r][k]);
-    }
-
-    for(let i=0;i<MAX_POINTS;i++){
-        const c=candidates[i]||{x:0,y:0,z:0};
-        baseTargetPositions[i*3]   = c.x*currentSpacing;
-        baseTargetPositions[i*3+1] = c.y*currentSpacing;
-        baseTargetPositions[i*3+2] = c.z*currentSpacing;
+    // Zero-out any range above the cached candidates (rare — only if a layout has < activePointCount points)
+    for (let i = baseLim * 3; i < Math.max(activePointCount, _maxRenderedCount) * 3; i++) {
+        baseTargetPositions[i] = 0;
     }
     if (padicModeActive) {
         applyPadicPositions();
     } else if (primeDimModeActive) {
         applyPrimeDimPositions();
         buildPrimeDimAxisObjects();
-    } else if (zetaModeActive) {
-        computeZetaOffsets(zetaZeroCount);
-        applyZetaOffsets();
-    } else if (ntlModeActive) {
-        computeNTLOffsets();
-        applyNTLOffsets();
     } else {
-        for (let i = 0; i < MAX_POINTS * 3; i++) targetPositions[i] = baseTargetPositions[i];
-        lerpActive = true;
+        // Zeta and NTL are both Z-axis overlays — they always *add* on top of the lattice base,
+        // never override it. computeZetaOffsets is async (worker), so apply the current overlays
+        // immediately for snappy feedback; the worker result will refresh again when it lands.
+        if (ntlModeActive) computeNTLOffsets();
+        if (zetaModeActive) computeZetaOffsets(zetaZeroCount);
+        applyPositionOverlays();
     }
 }
 
@@ -1770,8 +1902,11 @@ function animate(now = 0) {
 
     if (lerpActive) {
         const p = geometry.attributes.position.array;
+        // Only lerp particles that are actually drawn — invisible particles
+        // (n > activePointCount) don't need to chase their targets.
+        const limit = activePointCount * 3;
         let maxDeltaSq = 0;
-        for (let i = 0; i < MAX_POINTS * 3; i++) {
+        for (let i = 0; i < limit; i++) {
             const delta = (targetPositions[i] - p[i]) * lerpSpeed;
             p[i] += delta;
             if (delta * delta > maxDeltaSq) maxDeltaSq = delta * delta;
@@ -1810,7 +1945,66 @@ const _nixieFont = new FontFace(
     "url(https://fonts.gstatic.com/s/nixieone/v17/lW-8wjkKLXjg5y2o2uUoUA.woff2) format('woff2')," +
     "url(https://fonts.gstatic.com/s/nixieone/v17/lW-8wjkKLXjg5y2o2uUoUA.ttf) format('truetype')"
 );
-_nixieFont.load().then(f => {
-    document.fonts.add(f);
+
+// Boot sequence: kick off worker init and font load in parallel, show progress bar,
+// then run init() once both have settled. Either side can fail without blocking the app —
+// font load races against a 5s ceiling so a flaky CDN can't stall startup.
+async function boot() {
+    _setBootStage('Loading font…', 2);
+    const fontPromise = Promise.race([
+        _nixieFont.load().then(f => document.fonts.add(f)).catch(() => {}),
+        new Promise(r => setTimeout(r, 5000)),
+    ]);
+    _setBootStage('Spinning up worker…', 5);
+    try {
+        await initWorker();
+    } catch (e) {
+        console.error('Worker init failed, falling back to main-thread sieves', e);
+        _fallbackBuildOnMainThread();
+    }
+    await fontPromise;
+    _setBootStage('Building lattice…', 99);
     init();
-}).catch(() => init());
+    _setBootStage('Ready', 100);
+    requestAnimationFrame(() => _hideBootOverlay());
+}
+
+// Fallback: if Worker isn't available (very old browsers, file:// without server, etc.),
+// rebuild sieves and tables synchronously on the main thread.
+function _fallbackBuildOnMainThread() {
+    isPrimeArray.fill(1);
+    isPrimeArray[0] = isPrimeArray[1] = 0;
+    for (let i = 2; i * i <= MAX_POINTS; i++) {
+        if (isPrimeArray[i]) for (let j = i * i; j <= MAX_POINTS; j += i) isPrimeArray[j] = 0;
+    }
+    let prev = 2;
+    for (let i = 3; i <= MAX_POINTS; i++) {
+        if (isPrimeArray[i]) { primeGaps[prev] = Math.min(i - prev, 255); prev = i; }
+    }
+    // NTL tables
+    const sigmaSum = new Float64Array(MAX_POINTS + 1);
+    const divCount = new Uint16Array(MAX_POINTS + 1);
+    for (let d = 1; d <= MAX_POINTS; d++) {
+        for (let m = d; m <= MAX_POINTS; m += d) { divCount[m]++; sigmaSum[m] += d; }
+    }
+    for (let n = 1; n <= MAX_POINTS; n++) { ntl_d[n] = divCount[n]; ntl_sigma[n] = sigmaSum[n] / n; }
+    for (let n = 1; n <= MAX_POINTS; n++) ntl_mu[n] = 1;
+    const sp = new Int32Array(MAX_POINTS + 1);
+    for (let i = 2; i <= MAX_POINTS; i++) {
+        if (sp[i] === 0) for (let j = i; j <= MAX_POINTS; j += i) if (sp[j] === 0) sp[j] = i;
+    }
+    for (let n = 2; n <= MAX_POINTS; n++) {
+        let m = n, sf = true, c = 0;
+        while (m > 1) { const p = sp[m]; let e = 0; while (m % p === 0) { m = (m/p)|0; e++; } c++; if (e>1) sf=false; }
+        ntl_omega[n] = c;
+        ntl_mu[n] = sf ? (c % 2 === 0 ? 1 : -1) : 0;
+    }
+    for (let n = 0; n <= MAX_POINTS; n++) ntl_phi[n] = n;
+    for (let p = 2; p <= MAX_POINTS; p++) {
+        if (ntl_phi[p] === p) for (let m = p; m <= MAX_POINTS; m += p) ntl_phi[m] -= (ntl_phi[m]/p)|0;
+    }
+    ntl_phi[1] = 1;
+    _workerReady = false;  // worker not usable; zeta will compute synchronously below
+}
+
+boot();

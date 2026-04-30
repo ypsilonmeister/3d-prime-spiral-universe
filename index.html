@@ -59,7 +59,8 @@
         </div>
 
         <div id="group-zeta-toggle">
-        <div class="section-label">Zeta Wave Mode</div>
+        <div class="section-label">Zeta Wave Mode<span class="help-tip" data-tip="Riemann Zeta function zeros encode the distribution of primes. Each zero adds a wave of varying frequency along the Z axis — the more zeros, the sharper the peaks become at prime positions.">?</span></div>
+        <div class="section-sub">Primes as standing waves along Z</div>
         <div class="toggle-row" onclick="toggleZetaMode()">
             <span>Enable</span>
             <div class="toggle-switch" id="sw-zeta"></div>
@@ -76,7 +77,8 @@
         </div>
 
         <div id="group-padic-toggle">
-        <div class="section-label">p-adic View Mode</div>
+        <div class="section-label">p-adic View Mode<span class="help-tip" data-tip="The p-adic valuation v_p(n) counts how many times p divides n. Numbers cluster onto concentric shells: outer = not divisible, inner = highly divisible by p.">?</span></div>
+        <div class="section-sub">Layered by divisibility by p</div>
         <div class="toggle-row" onclick="togglePadicMode()">
             <span>Enable</span>
             <div class="toggle-switch" id="sw-padic"></div>
@@ -121,7 +123,8 @@
         </div>
 
         <div id="group-primedim-toggle">
-        <div class="section-label">Prime Dimension Mode</div>
+        <div class="section-label">Prime Dimension Mode<span class="help-tip" data-tip="Each axis (X/Y/Z) represents one prime. A number's coordinates are how many times it's divisible by each. Multiples of a single prime line up on its axis; multiples of two land on a plane.">?</span></div>
+        <div class="section-sub">3 chosen primes as axes</div>
         <div class="toggle-row" onclick="togglePrimeDimMode()">
             <span>Enable</span>
             <div class="toggle-switch" id="sw-primedim"></div>
@@ -221,7 +224,8 @@
             </div>
         </div>
 
-        <div class="section-label">Number Theoretic Landscape</div>
+        <div class="section-label">Number Theoretic Landscape<span class="help-tip" data-tip="Lifts each number on the Z axis by an arithmetic function (divisor count, abundance, distinct prime factors, …). Reveals 'spikes' at highly composite numbers and 'valleys' at primes.">?</span></div>
+        <div class="section-sub">Z-height by arithmetic function</div>
         <div class="toggle-row" onclick="toggleNTLMode()">
             <span>Enable</span>
             <div class="toggle-switch" id="sw-ntl"></div>
@@ -248,7 +252,8 @@
             </div>
         </div>
 
-        <div class="section-label">Sieve of Eratosthenes</div>
+        <div class="section-label">Sieve of Eratosthenes<span class="help-tip" data-tip="Animates the classical algorithm: start with all candidates, repeatedly cross out multiples of the smallest unmarked number. What remains glows gold — the primes.">?</span></div>
+        <div class="section-sub">Watch primes emerge step by step</div>
         <div class="toggle-row" onclick="toggleSieveMode()">
             <span>Enable</span>
             <div class="toggle-switch" id="sw-sieve"></div>
@@ -319,14 +324,22 @@
     </div>
     
     <div id="show-ui-hint" style="opacity: 0;">Double Tap or Press 'H' to show menu</div>
-    
+
+    <div id="boot-overlay">
+        <div id="boot-card">
+            <div id="boot-title">PrimeCrystal</div>
+            <div id="boot-stage">Initializing…</div>
+            <progress id="boot-progress" max="100" value="0"></progress>
+        </div>
+    </div>
+
     <div id="canvas-container"></div>
 
     <script type="importmap">
         {
             "imports": {
-                "three": "https://unpkg.com/three@0.167.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.167.0/examples/jsm/"
+                "three": "./vendor/three/build/three.module.js",
+                "three/addons/": "./vendor/three/examples/jsm/"
             }
         }
     </script>

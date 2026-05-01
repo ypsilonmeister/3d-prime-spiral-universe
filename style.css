@@ -361,28 +361,33 @@ button.active {
     position: relative;
     vertical-align: middle;
 }
-.help-tip:hover {
+.help-tip:hover,
+.help-tip:focus {
     background: rgba(0, 242, 255, 0.3);
+    outline: none;
 }
-.help-tip[data-tip]:hover::after {
-    content: attr(data-tip);
-    position: absolute;
-    left: 18px;
-    top: 50%;
-    transform: translateY(-50%);
+
+#help-tooltip {
+    position: fixed;
+    max-width: 240px;
     background: rgba(10, 10, 25, 0.95);
     border: 1px solid rgba(0, 242, 255, 0.4);
     color: #e0e0e0;
     padding: 6px 8px;
     border-radius: 6px;
-    white-space: normal;
-    width: 200px;
     font-size: 0.65rem;
     line-height: 1.4;
-    z-index: 10;
+    z-index: 1000;
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
     text-shadow: none;
     pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.12s ease;
+}
+#help-tooltip.visible {
+    opacity: 1;
+    visibility: visible;
 }
 .section-sub {
     font-size: 0.6rem;

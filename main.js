@@ -780,6 +780,63 @@ function classifyNumbers() {
     }
 }
 
+function setupHelpTooltips() {
+    const tooltip = document.getElementById('help-tooltip');
+    if (!tooltip) return;
+    const MARGIN = 8;
+    const GAP = 10;
+    let activeTip = null;
+
+    const place = (anchor) => {
+        const text = anchor.getAttribute('data-tip');
+        if (!text) return;
+        tooltip.textContent = text;
+        tooltip.classList.add('visible');
+        tooltip.setAttribute('aria-hidden', 'false');
+
+        const rect = anchor.getBoundingClientRect();
+        const tw = tooltip.offsetWidth;
+        const th = tooltip.offsetHeight;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+
+        let left = rect.right + GAP;
+        if (left + tw + MARGIN > vw) left = rect.left - GAP - tw;
+        left = Math.max(MARGIN, Math.min(left, vw - tw - MARGIN));
+
+        let top = rect.top + rect.height / 2 - th / 2;
+        top = Math.max(MARGIN, Math.min(top, vh - th - MARGIN));
+
+        tooltip.style.left = left + 'px';
+        tooltip.style.top = top + 'px';
+    };
+
+    const hide = () => {
+        tooltip.classList.remove('visible');
+        tooltip.setAttribute('aria-hidden', 'true');
+        activeTip = null;
+    };
+
+    document.querySelectorAll('.help-tip').forEach(el => {
+        el.setAttribute('tabindex', '0');
+        el.addEventListener('mouseenter', () => { activeTip = el; place(el); });
+        el.addEventListener('mouseleave', () => { if (activeTip === el) hide(); });
+        el.addEventListener('focus', () => { activeTip = el; place(el); });
+        el.addEventListener('blur', () => { if (activeTip === el) hide(); });
+        el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (activeTip === el) hide();
+            else { activeTip = el; place(el); }
+        });
+    });
+
+    document.addEventListener('click', (e) => {
+        if (activeTip && !activeTip.contains(e.target)) hide();
+    });
+    window.addEventListener('scroll', () => { if (activeTip) place(activeTip); }, true);
+    window.addEventListener('resize', () => { if (activeTip) place(activeTip); });
+}
+
 function init() {
     scene = new THREE.Scene();
 
@@ -814,6 +871,7 @@ function init() {
     classifyNumbers();
     buildTypeUI();
     createParticles();
+    setupHelpTooltips();
 
     window.addEventListener('resize', onWindowResize);
     window.addEventListener('keydown', (e) => {

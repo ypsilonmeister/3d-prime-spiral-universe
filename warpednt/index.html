@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Warped Number Theory Universe</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Nixie+One&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="ui-overlay">
+    <h1>Warped Universe</h1>
+
+    <div class="section-label">Metric</div>
+    <select id="metric-select" onchange="setMetric(this.value)">
+        <option value="euclidean">Euclidean  |n|</option>
+        <option value="log">Logarithmic  log n</option>
+        <option value="padic">p-adic  |n|_p</option>
+        <option value="adelic">Adelic  (combined p-adic)</option>
+        <option value="arakelov">Arakelov-style</option>
+    </select>
+
+    <div class="section-label">Warp Strength</div>
+    <div class="slider-row">
+        <label>α</label>
+        <input type="range" id="warp-slider" min="0" max="100" value="100"
+               oninput="setWarp(+this.value)">
+        <span id="warp-val">1.00</span>
+    </div>
+
+    <div class="section-label">Metric Blend</div>
+    <div class="blend-row">
+        <label>Eucl</label>
+        <input type="range" id="blend-eucl" min="0" max="100" value="0"
+               oninput="setBlend('euclidean', +this.value)">
+        <span id="blend-eucl-val">0</span>
+    </div>
+    <div class="blend-row">
+        <label>Log</label>
+        <input type="range" id="blend-log" min="0" max="100" value="0"
+               oninput="setBlend('log', +this.value)">
+        <span id="blend-log-val">0</span>
+    </div>
+    <div class="blend-row">
+        <label>p₂</label>
+        <input type="range" id="blend-p2" min="0" max="100" value="100"
+               oninput="setBlend('p2', +this.value)">
+        <span id="blend-p2-val">100</span>
+    </div>
+    <div class="blend-row">
+        <label>p₃</label>
+        <input type="range" id="blend-p3" min="0" max="100" value="0"
+               oninput="setBlend('p3', +this.value)">
+        <span id="blend-p3-val">0</span>
+    </div>
+    <div class="blend-row">
+        <label>p₅</label>
+        <input type="range" id="blend-p5" min="0" max="100" value="0"
+               oninput="setBlend('p5', +this.value)">
+        <span id="blend-p5-val">0</span>
+    </div>
+
+    <div class="section-label">p-adic prime</div>
+    <select id="padic-prime" onchange="setPadicPrime(+this.value)">
+        <option value="2">p = 2</option>
+        <option value="3">p = 3</option>
+        <option value="5">p = 5</option>
+        <option value="7">p = 7</option>
+        <option value="11">p = 11</option>
+        <option value="13">p = 13</option>
+        <option value="17">p = 17</option>
+        <option value="19">p = 19</option>
+        <option value="23">p = 23</option>
+    </select>
+
+    <div class="section-label">Point count</div>
+    <div class="slider-row">
+        <label>N</label>
+        <input type="range" id="count-slider" min="1000" max="32000" step="1000" value="8000"
+               oninput="setCount(+this.value)">
+        <span id="count-val">8000</span>
+    </div>
+
+    <div class="section-label">Layout</div>
+    <select id="layout-select" onchange="setLayout(this.value)">
+        <option value="spiral">Prime spiral</option>
+        <option value="line">Number line</option>
+        <option value="shell">Spherical shell</option>
+    </select>
+
+    <div class="section-label">Color mode</div>
+    <select id="color-select" onchange="setColorMode(this.value)">
+        <option value="prime">Prime / composite</option>
+        <option value="padic">p-adic depth</option>
+        <option value="metric">Metric distance</option>
+        <option value="mobius">Möbius μ(n)</option>
+    </select>
+
+    <div class="section-label">Options</div>
+    <label class="toggle-row">
+        <span>Einstein warp</span>
+        <div class="toggle-switch" id="toggle-einstein" onclick="toggleEinstein()"></div>
+    </label>
+    <label class="toggle-row">
+        <span>Zeta overlay</span>
+        <div class="toggle-switch" id="toggle-zeta" onclick="toggleZeta()"></div>
+    </label>
+    <label class="toggle-row">
+        <span>Auto-rotate</span>
+        <div class="toggle-switch on" id="toggle-rotate" onclick="toggleRotate()"></div>
+    </label>
+    <label class="toggle-row">
+        <span>Show labels</span>
+        <div class="toggle-switch on" id="toggle-labels" onclick="toggleLabels()"></div>
+    </label>
+
+    <div class="section-label">Info</div>
+    <div id="metric-description"></div>
+</div>
+
+<div id="canvas-container"></div>
+
+<div id="hover-info"></div>
+
+<script type="importmap">
+{
+    "imports": {
+        "three": "../vendor/three/build/three.module.js",
+        "three/addons/": "../vendor/three/examples/jsm/"
+    }
+}
+</script>
+<script type="module" src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Prime Number Music Generator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Nixie+One&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="ui-overlay">
+    <h1>Prime Music</h1>
+
+    <!-- Transport -->
+    <div class="transport">
+        <button id="btn-play"  onclick="togglePlay()" title="Play / Pause">▶</button>
+        <button id="btn-stop"  onclick="stopPlay()"   title="Stop">■</button>
+        <button id="btn-rec"   onclick="toggleRec()"  title="Record">⏺</button>
+    </div>
+
+    <div class="section-label">Mode</div>
+    <select id="mode-select" onchange="setMode(this.value)">
+        <option value="primes">Primes — click on each prime</option>
+        <option value="zeta">Zeta Zeros — continuous tones</option>
+        <option value="combined">Combined — primes + zeta</option>
+        <option value="padic">p-adic — factor chords</option>
+        <option value="mobius">Möbius — μ(n) rhythm</option>
+        <option value="divisors">Divisors — d(n) melody</option>
+        <option value="sieve">Sieve — Eratosthenes sweep</option>
+    </select>
+
+    <div class="section-label">Speed</div>
+    <div class="slider-row">
+        <label>n/sec</label>
+        <input type="range" id="speed-slider" min="1" max="200" value="20" oninput="setSpeed(+this.value)">
+        <span id="speed-val">20</span>
+    </div>
+
+    <div class="section-label">Start from n =</div>
+    <div class="slider-row">
+        <label>Start</label>
+        <input type="range" id="start-slider" min="1" max="9900" value="1" oninput="setStart(+this.value)">
+        <span id="start-val">1</span>
+    </div>
+
+    <div id="group-zeta">
+        <div class="section-label">Zeta zeros used</div>
+        <div class="slider-row">
+            <label>Count</label>
+            <input type="range" id="zeta-count" min="1" max="50" value="10" oninput="setZetaCount(+this.value)">
+            <span id="zeta-count-val">10</span>
+        </div>
+        <div class="section-label">Zero amplitude</div>
+        <div class="slider-row">
+            <label>Amp</label>
+            <input type="range" id="zeta-amp" min="1" max="100" value="40" oninput="setZetaAmp(+this.value)">
+            <span id="zeta-amp-val">40</span>
+        </div>
+    </div>
+
+    <div class="section-label">Master volume</div>
+    <div class="slider-row">
+        <label>Vol</label>
+        <input type="range" id="vol-slider" min="0" max="100" value="70" oninput="setVolume(+this.value)">
+        <span id="vol-val">70</span>
+    </div>
+
+    <div class="section-label">Reverb</div>
+    <div class="slider-row">
+        <label>Wet</label>
+        <input type="range" id="reverb-slider" min="0" max="100" value="30" oninput="setReverb(+this.value)">
+        <span id="reverb-val">30</span>
+    </div>
+
+    <div class="section-label">Pitch base</div>
+    <div class="slider-row">
+        <label>Hz</label>
+        <input type="range" id="pitch-slider" min="50" max="500" value="110" oninput="setPitch(+this.value)">
+        <span id="pitch-val">110</span>
+    </div>
+
+    <div class="section-label">Waveform</div>
+    <select id="wave-select" onchange="setWave(this.value)">
+        <option value="sine">Sine</option>
+        <option value="triangle">Triangle</option>
+        <option value="sawtooth">Sawtooth</option>
+        <option value="square">Square</option>
+    </select>
+
+    <div class="section-label">Export</div>
+    <button id="btn-export" onclick="exportWav()" class="btn-export">Download WebM</button>
+    <div id="rec-status"></div>
+
+    <div class="section-label">Info</div>
+    <div id="mode-description"></div>
+</div>
+
+<div id="main-area">
+    <div id="counter-display">
+        <span id="n-label">n =</span>
+        <span id="n-value">—</span>
+        <span id="n-tag"></span>
+    </div>
+    <canvas id="wave-canvas"></canvas>
+    <canvas id="number-canvas"></canvas>
+</div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>

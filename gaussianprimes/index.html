@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Gaussian Prime Visualizer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Nixie+One&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="ui-overlay">
+    <h1>Gaussian Primes</h1>
+
+    <div class="section-label">Number Field</div>
+    <select id="field-select" onchange="setField(this.value)">
+        <option value="gaussian">ℤ[i] — Gaussian</option>
+        <option value="eisenstein">ℤ[ω] — Eisenstein</option>
+        <option value="zsqrt2n">ℤ[√−2]</option>
+        <option value="zsqrt5n">ℤ[√−5] (non-UFD)</option>
+        <option value="zsqrt2">ℤ[√2] (real)</option>
+        <option value="zsqrt3">ℤ[√3] (real)</option>
+    </select>
+
+    <div class="section-label">View Range</div>
+    <div class="slider-row">
+        <label>Range</label>
+        <input type="range" id="range-slider" min="5" max="60" value="20" oninput="setRange(+this.value)">
+        <span id="range-val">20</span>
+    </div>
+
+    <div class="section-label">Highlight Prime</div>
+    <div class="input-row">
+        <input type="number" id="prime-input" min="2" max="9999" placeholder="e.g. 13" oninput="highlightPrime(+this.value)">
+        <button onclick="clearHighlight()">✕</button>
+    </div>
+    <div id="prime-info"></div>
+
+    <div class="section-label">Display</div>
+    <label class="toggle-row">
+        <span>Show norms</span>
+        <div class="toggle-switch" id="toggle-norms" onclick="toggleNorms()"></div>
+    </label>
+    <label class="toggle-row">
+        <span>Show grid</span>
+        <div class="toggle-switch on" id="toggle-grid" onclick="toggleGrid()"></div>
+    </label>
+    <label class="toggle-row">
+        <span>Show axes</span>
+        <div class="toggle-switch on" id="toggle-axes" onclick="toggleAxes()"></div>
+    </label>
+    <label class="toggle-row">
+        <span>Show labels</span>
+        <div class="toggle-switch on" id="toggle-labels" onclick="toggleLabels()"></div>
+    </label>
+    <label class="toggle-row">
+        <span>4-fold sym.</span>
+        <div class="toggle-switch" id="toggle-sym4" onclick="toggleSym4()"></div>
+    </label>
+
+    <div class="section-label">UFD Decomposition</div>
+    <div id="ufd-panel">
+        <div id="ufd-example"></div>
+    </div>
+
+    <div class="section-label">Field Info</div>
+    <div id="field-description"></div>
+
+    <div class="section-label">Legend</div>
+    <div class="legend">
+        <div class="legend-item"><span class="dot prime"></span>Prime in field</div>
+        <div class="legend-item"><span class="dot inert"></span>Inert rational prime</div>
+        <div class="legend-item"><span class="dot split"></span>Split rational prime</div>
+        <div class="legend-item"><span class="dot ramified"></span>Ramified prime</div>
+        <div class="legend-item"><span class="dot composite"></span>Composite</div>
+    </div>
+</div>
+
+<div id="canvas-container">
+    <canvas id="main-canvas"></canvas>
+    <div id="tooltip"></div>
+</div>
+
+<script type="module" src="main.js"></script>
+</body>
+</html>

@@ -14,6 +14,13 @@
 <div id="ui-overlay">
     <h1>Gaussian Primes</h1>
 
+    <div class="section-label">Explore Universes</div>
+    <div class="controls" style="flex-direction: column; gap: 4px; margin-bottom: 12px;">
+        <button onclick="window.location.href='../index.html'" style="text-align: left;">🏠 Main Universe</button>
+        <button onclick="window.location.href='../warpednt/index.html'" style="text-align: left;">🌌 Warped Universe</button>
+        <button onclick="window.location.href='../primemusic/index.html'" style="text-align: left;">🎵 Prime Music</button>
+    </div>
+
     <div class="section-label">Number Field</div>
     <select id="field-select" onchange="setField(this.value)">
         <option value="gaussian">ℤ[i] — Gaussian</option>

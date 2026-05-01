@@ -66,6 +66,30 @@ h1 {
     margin-bottom: 1px;
 }
 
+/* ── Nav buttons ── */
+.controls {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.controls button {
+    width: 100%;
+    padding: 5px 7px;
+    background: rgba(0,242,255,0.06);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: inherit;
+    font-size: 0.68rem;
+    border-radius: 3px;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.15s, color 0.15s;
+}
+.controls button:hover {
+    background: rgba(0,242,255,0.16);
+    color: var(--text);
+}
+
 /* ── Transport buttons ── */
 .transport {
     display: flex;

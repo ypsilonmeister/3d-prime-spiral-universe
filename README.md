@@ -11,11 +11,27 @@ An interactive 3D WebGL visualization exploring the distribution of prime number
 ## Features | 主な機能
 
 - **AI Collaborative Creation:** Built through the synergy of Gemini and Claude, combining different perspectives on number theory and computer graphics.
-- **320,000 Data Points:** High-performance rendering using GPU custom shaders.
-- **8 Lattice Structures:** Explore space-filling honeycombs like Truncated Octahedron and Rhombic Dodecahedron.
-- **Digital Morphing Labels:** Distant "stars" seamlessly transform into digits as you zoom in.
-- **Multi-View Stereo:** Integrated Parallel and Cross-eyed stereoscopic modes.
-- **Auto-Grow (Big Bang):** Watch the prime universe expand in real-time from the origin "1".
+- **320,000 Data Points:** High-performance rendering using GPU custom shaders, displaying integers from 1 up to 320,000.
+- **Digital Morphing Labels:** Distant "stars" seamlessly transform into glowing digits (Nixie tube style) as you zoom in.
+- **11 Lattice Structures:** Explore space-filling geometries including Cubic, Hexagonal Prism, Truncated Octahedron, Rhombic Dodecahedron, Gyroid, and more.
+- **8 Fill Sequences:** Watch numbers populate space via Spherical Shell, Diamond (L1), Vortex, Modular ÷6, and Z-Order curves.
+- **Interactive Help Tooltips:** Built-in guidance for complex mathematical modes, explaining the concepts directly within the UI.
+- **Multi-View Stereo & WebXR:** Integrated Parallel/Cross-eyed stereoscopic modes and Immersive VR support (`immersive-vr`).
+
+### Advanced Mathematical Modes | 高度な数学的モード
+
+- **Zeta Wave Mode:** Visualizes the non-trivial zeros of the Riemann Zeta function as standing waves along the Z-axis, showing how primes are encoded in the zeros.
+- **p-adic View Mode:** Numbers cluster onto concentric shells based on their p-adic valuation $v_p(n)$ (divisibility by a chosen prime $p$).
+- **Prime Dimension Mode:** Select three primes to act as X, Y, and Z axes, revealing how numbers factorize across dimensions.
+- **Number Theoretic Landscape (NTL):** Z-height represents arithmetic functions like divisor count $d(n)$, abundance ratio $\sigma(n)/n$, distinct prime factors $\omega(n)$, Möbius function $\mu(n)$, and Euler's totient $\phi(n)$.
+- **Sieve of Eratosthenes Animation:** Watch the classical algorithm eliminate composites step-by-step, revealing the golden primes.
+
+## Sub-Universes / 関連プロジェクト
+
+The repository also includes standalone visualizations exploring different aspects of number theory:
+- **Warped Number Theory Universe (`/warpednt`):** A new visualization exploring space with custom mathematical metrics and warp strengths.
+- **Gaussian Primes (`/gaussianprimes`):** Visualization of primes in the complex plane.
+- **Prime Music (`/primemusic`):** Auditory exploration of prime distributions.
 
 ## Controls | 操作方法
 
@@ -30,11 +46,11 @@ An interactive 3D WebGL visualization exploring the distribution of prime number
 - **[C]**: Center view on "1" (黄金の「1」に視点をリセット)
 - **[G]**: Toggle Auto-Grow mode (宇宙の自動成長)
 
-## Mathematical Background | 数学的な背景
+## Mathematical Background & Tech | 数学的背景と技術
 
-- **Prime Calculation:** Uses the **Sieve of Eratosthenes** for near-instant calculation of 320k numbers.
-- **Space Filling:** Implements advanced 3D tessellations found in crystallography and geometry.
-- **AI Perspective:** This tool was developed through an iterative dialogue between humans and AI, exploring how mathematical randomness resolves into visual patterns.
+- **Web Workers:** Heavy number theoretic computations (Sieve, NTL tables, Zeta offsets) are offloaded to a Web Worker, ensuring a fluid 60FPS UI.
+- **GPU Acceleration:** Point sizes, colors, and dynamic texture atlas coordinate generation are handled entirely in a custom GLSL `ShaderMaterial`.
+- **Zero-Copy Transfers:** Uses Transferable Objects (`ArrayBuffer`) to pass massive mathematical arrays between the Worker and the Main thread instantly.
 
 ## Setup | セットアップ
 

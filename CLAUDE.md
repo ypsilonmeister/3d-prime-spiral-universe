@@ -14,15 +14,25 @@ python -m http.server
 npx serve .
 ```
 
-No build step, no package manager, no tests. Changes to `main.js` or `index.html` are live on refresh.
+We use `pnpm` for managing dev dependencies (Playwright). Playwright tests can be run with:
 
+```bash
+pnpm test
+```
+
+Changes are live on refresh (no bundler/compilation is used).
 Deployment is automatic: push to `master` → GitHub Actions deploys to GitHub Pages.
 
 ## Architecture
 
-The entire app is three files: `index.html`, `main.js`, `style.css`.
+The main app is split into:
+- `index.html` — Entry HTML setting up import maps and UI layout.
+- `app/` — Application components (main entry, state management, render loop, UI handlers, modes).
+- `shared/` — Mathematical algorithms (sieve, arithmetic, zeta zeros) and styling shared across the main app and sub-apps.
+- `worker.js` — Web worker performing background math computations.
+- `warpednt/`, `gaussianprimes/`, `primemusic/` — Independent sub-apps.
 
-**Rendering pipeline** (`main.js`)
+**Rendering pipeline** (`app/render/`)
 
 - Three.js `Points` with a custom `ShaderMaterial` renders all 320,000 particles in a single draw call.
 - `renderer.setAnimationLoop()` is used instead of `requestAnimationFrame` — required for WebXR compatibility.

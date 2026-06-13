@@ -5,54 +5,17 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-// ── Riemann zeta zeros (imaginary parts) ─────────────────────────────────────
-const ZETA_ZEROS = [
-    14.134725, 21.022040, 25.010858, 30.424876, 32.935062,
-    37.586178, 40.918719, 43.327073, 48.005151, 49.773832,
-    52.970321, 56.446247, 59.347044, 60.831779, 65.112544,
-    67.079811, 69.546401, 72.067157, 75.704691, 77.144840,
-];
+import { ZETA_ZEROS } from '../shared/zeta-zeros.js';
+import { buildSieve } from '../shared/sieve.js';
+import { padicValuation, padicNorm, mobius as sharedMobius } from '../shared/arithmetic.js';
 
 // ── Number theory tables ──────────────────────────────────────────────────────
 const MAX_N = 32001;
 
-const _sieve = new Uint8Array(MAX_N + 1).fill(1);
-_sieve[0] = _sieve[1] = 0;
-for (let i = 2; i * i <= MAX_N; i++)
-    if (_sieve[i]) for (let j = i * i; j <= MAX_N; j += i) _sieve[j] = 0;
-
-const _spf = new Uint16Array(MAX_N + 1); // smallest prime factor
-for (let i = 0; i <= MAX_N; i++) _spf[i] = i;
-for (let i = 2; i * i <= MAX_N; i++)
-    if (_spf[i] === i) for (let j = i * i; j <= MAX_N; j += i)
-        if (_spf[j] === j) _spf[j] = i;
+const { isPrime: _sieve, spf: _spf } = buildSieve(MAX_N);
 
 function isPrime(n) { return n >= 2 && _sieve[n] === 1; }
-
-function padicValuation(n, p) {
-    if (n === 0) return Infinity;
-    if (p <= 1) return 0;  // guard against infinite loop
-    let v = 0;
-    while (n % p === 0) { n = Math.floor(n / p); v++; }
-    return v;
-}
-
-function padicNorm(n, p) {
-    const v = padicValuation(n, p);
-    return v === Infinity ? 0 : Math.pow(p, -v);
-}
-
-function mobius(n) {
-    if (n === 1) return 1;
-    let k = n, factors = 0;
-    while (k > 1) {
-        const p = _spf[k];
-        k = Math.floor(k / p);
-        if (k % p === 0) return 0;
-        factors++;
-    }
-    return factors % 2 === 0 ? 1 : -1;
-}
+function mobius(n) { return sharedMobius(n, _spf); }
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let currentMetric  = 'padic';

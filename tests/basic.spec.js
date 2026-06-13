@@ -68,7 +68,7 @@ test.describe('PrimeCrystal Basic Verification', () => {
   test('should compose Zeta and NTL overlays consistently', async ({ page }) => {
     await page.locator('#group-zeta-toggle .toggle-row').click();
     await page.locator('#zeta-n-slider').fill('2');
-    await page.evaluate(() => window.toggleNTLMode());
+    await page.locator('#sw-ntl').click();
 
     await expect(page.locator('#sw-zeta')).toHaveClass(/on/);
     await expect(page.locator('#sw-ntl')).toHaveClass(/on/);
@@ -79,7 +79,80 @@ test.describe('PrimeCrystal Basic Verification', () => {
     await expect(page.locator('#spacing-val')).toHaveText('80');
   });
 
+  test('should handle p-adic and PrimeDim exclusivity', async ({ page }) => {
+    // Enable p-adic mode
+    await page.locator('#group-padic-toggle .toggle-row').click();
+    await expect(page.locator('#sw-padic')).toHaveClass(/on/);
+    await expect(page.locator('#group-primedim-toggle')).toHaveClass(/ui-section-disabled/);
+
+    // Disable p-adic mode
+    await page.locator('#group-padic-toggle .toggle-row').click();
+    await expect(page.locator('#sw-padic')).not.toHaveClass(/on/);
+    await expect(page.locator('#group-primedim-toggle')).not.toHaveClass(/ui-section-disabled/);
+
+    // Enable PrimeDim mode
+    await page.locator('#group-primedim-toggle .toggle-row').click();
+    await expect(page.locator('#sw-primedim')).toHaveClass(/on/);
+    await expect(page.locator('#group-padic-toggle')).toHaveClass(/ui-section-disabled/);
+
+    // Disable PrimeDim mode
+    await page.locator('#group-primedim-toggle .toggle-row').click();
+    await expect(page.locator('#sw-primedim')).not.toHaveClass(/on/);
+    await expect(page.locator('#group-padic-toggle')).not.toHaveClass(/ui-section-disabled/);
+  });
+
+  test('should recompute active mode variables when count changes', async ({ page }) => {
+    // Enable PrimeDim mode
+    await page.locator('#group-primedim-toggle .toggle-row').click();
+    
+    // Change count slider
+    await page.locator('#count-slider').fill('100000');
+    await expect(page.locator('#count-val')).toHaveText('100,000');
+
+    // Enable NTL mode and change count slider
+    await page.locator('#sw-ntl').click();
+    await page.locator('#count-slider').fill('50000');
+    await expect(page.locator('#count-val')).toHaveText('50,000');
+  });
+
   test('should capture initial rendering screenshot', async ({ page }) => {
     await page.screenshot({ path: 'test-results/initial-render.png' });
   });
 });
+
+test.describe('Sub-apps Smoke Tests', () => {
+  test('should load Warped Universe without page errors', async ({ page }) => {
+    const browserErrors = [];
+    page.on('pageerror', err => browserErrors.push(err.message));
+    
+    await page.goto('/warpednt/index.html', { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveTitle(/Warped Number Theory Universe/);
+    await expect(page.locator('#ui-overlay')).toBeVisible();
+    await expect(page.locator('#canvas-container')).toBeVisible();
+    
+    expect(browserErrors).toEqual([]);
+  });
+
+  test('should load Gaussian Primes without page errors', async ({ page }) => {
+    const browserErrors = [];
+    page.on('pageerror', err => browserErrors.push(err.message));
+    
+    await page.goto('/gaussianprimes/index.html', { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveTitle(/Gaussian Prime/);
+    await expect(page.locator('#canvas-container')).toBeVisible();
+    
+    expect(browserErrors).toEqual([]);
+  });
+
+  test('should load Prime Music without page errors', async ({ page }) => {
+    const browserErrors = [];
+    page.on('pageerror', err => browserErrors.push(err.message));
+    
+    await page.goto('/primemusic/index.html', { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveTitle(/Prime Number Music/);
+    await expect(page.locator('#number-canvas')).toBeVisible();
+    
+    expect(browserErrors).toEqual([]);
+  });
+});
+

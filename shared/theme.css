@@ -1,0 +1,180 @@
+/* 3D Prime Spiral Universe - Common Cyber-Scientific Theme Styles */
+
+:root {
+    --accent: #00f2ff;
+    --accent-glow: rgba(0, 242, 255, 0.5);
+    --accent-glow-tight: rgba(0, 242, 255, 0.7);
+    --accent-dim: rgba(0, 242, 255, 0.2);
+    --accent-bg: rgba(0, 242, 255, 0.06);
+    --accent-bg-hover: rgba(0, 242, 255, 0.16);
+    
+    --accent2: #ffd700;
+    --accent2-glow: rgba(255, 215, 0, 0.5);
+    
+    --bg-dark: #010102;
+    --panel-bg: rgba(10, 10, 20, 0.6);
+    --panel-bg-heavy: rgba(10, 10, 25, 0.95);
+    --border-dim: rgba(255, 255, 255, 0.2);
+    --text-main: #e0e0e0;
+    --text-dim: #888;
+}
+
+/* Custom Scrollbars */
+.custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: var(--accent-dim) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: var(--accent-dim);
+    border-radius: 2px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: var(--accent);
+}
+
+/* Common Overlay Panels */
+.cyber-panel {
+    background: var(--panel-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--accent-dim);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.8);
+}
+
+/* Headings and Section Labels */
+.cyber-title {
+    margin: 0 0 10px 0;
+    font-weight: 300;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--accent);
+    text-shadow: 0 0 10px var(--accent-glow);
+}
+
+.cyber-label {
+    font-size: 0.62rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    opacity: 0.5;
+    margin: 8px 0 4px 0;
+}
+
+/* Custom Dropdowns */
+.cyber-select {
+    appearance: none;
+    -webkit-appearance: none;
+    background: rgba(255, 255, 255, 0.05)
+        url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24'%3E%3Cpath fill='%2300f2ff' d='M7 10l5 5 5-5z'/%3E%3C/svg%3E")
+        no-repeat right 10px center;
+    border: 1px solid var(--border-dim);
+    color: #fff;
+    font-family: 'Orbitron', 'Segoe UI', sans-serif;
+    cursor: pointer;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.cyber-select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 10px rgba(0, 242, 255, 0.3);
+}
+.cyber-select option {
+    background: #0a0a14;
+    color: var(--text-main);
+}
+
+/* Cyber Toggle Switches */
+.cyber-toggle-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    user-select: none;
+}
+
+.cyber-toggle-switch {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    flex-shrink: 0;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-dim);
+    border-radius: 10px;
+    transition: background 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+
+.cyber-toggle-switch::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    background: rgba(255, 255, 255, 0.35);
+    border-radius: 50%;
+    transition: left 0.2s, background 0.2s, transform 0.2s;
+}
+
+.cyber-toggle-switch.on {
+    background: rgba(0, 242, 255, 0.2);
+    border-color: var(--accent);
+    box-shadow: 0 0 8px rgba(0, 242, 255, 0.3);
+}
+
+.cyber-toggle-switch.on::after {
+    left: 18px;
+    background: var(--accent);
+    box-shadow: 0 0 4px var(--accent-glow-tight);
+}
+
+/* Custom Cyber Buttons */
+.cyber-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border-dim);
+    color: #fff;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.cyber-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.5);
+}
+.cyber-btn.active {
+    background: rgba(0, 242, 255, 0.25);
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 0 15px rgba(0, 242, 255, 0.4);
+    text-shadow: 0 0 5px var(--accent-glow);
+}
+
+/* Range Sliders */
+.cyber-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    background: rgba(0, 242, 255, 0.15);
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+}
+.cyber-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+    cursor: pointer;
+    transition: transform 0.1s ease;
+}
+.cyber-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+}

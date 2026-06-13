@@ -1,6 +1,8 @@
 // Gaussian Prime Visualizer
 // Visualizes primes in various algebraic number fields on a 2D plane.
 
+import { buildSieve } from '../shared/sieve.js';
+
 'use strict';
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -116,11 +118,7 @@ const FIELDS = {
 // ── Small prime sieve ─────────────────────────────────────────────────────────
 
 const SIEVE_MAX = 100000;
-const sieve = new Uint8Array(SIEVE_MAX + 1).fill(1);
-sieve[0] = sieve[1] = 0;
-for (let i = 2; i * i <= SIEVE_MAX; i++) {
-    if (sieve[i]) for (let j = i*i; j <= SIEVE_MAX; j += i) sieve[j] = 0;
-}
+const { isPrime: sieve } = buildSieve(SIEVE_MAX);
 
 function isRationalPrime(n) {
     n = Math.abs(n);

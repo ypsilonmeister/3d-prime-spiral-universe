@@ -1,47 +1,25 @@
 // Prime Number Music Generator
 // Web Audio API + Canvas — no dependencies
 
-'use strict';
+import { ZETA_ZEROS } from '../shared/zeta-zeros.js';
+import { buildSieve } from '../shared/sieve.js';
+import { mobius as sharedMobius } from '../shared/arithmetic.js';
 
-// ── Riemann zeta non-trivial zeros (imaginary parts γ_n) ─────────────────────
-// First 50 zeros from Odlyzko's tables
-const ZETA_ZEROS = [
-    14.134725, 21.022040, 25.010858, 30.424876, 32.935062,
-    37.586178, 40.918719, 43.327073, 48.005151, 49.773832,
-    52.970321, 56.446247, 59.347044, 60.831779, 65.112544,
-    67.079811, 69.546401, 72.067157, 75.704691, 77.144840,
-    79.337375, 82.910381, 84.735493, 87.425274, 88.809111,
-    92.491899, 94.651344, 95.870634, 98.831194, 101.317851,
-    103.725538, 105.446623, 107.168611, 111.029535, 111.874659,
-    114.320220, 116.226680, 118.790782, 121.370125, 122.946829,
-    124.256819, 127.516683, 129.578704, 131.087688, 133.497737,
-    134.756510, 138.116042, 139.736208, 141.123707, 143.111845,
-];
+'use strict';
 
 // ── Number theory tables ──────────────────────────────────────────────────────
 
 const MAX_N = 10000;
-
-// Sieve of Eratosthenes
-const _sieve = new Uint8Array(MAX_N + 1).fill(1);
-_sieve[0] = _sieve[1] = 0;
-for (let i = 2; i * i <= MAX_N; i++)
-    if (_sieve[i]) for (let j = i * i; j <= MAX_N; j += i) _sieve[j] = 0;
+const { isPrime: _sieve, spf: _spf } = buildSieve(MAX_N);
 
 function isPrime(n) { return n >= 2 && _sieve[n] === 1; }
-
-// Smallest prime factor (for factorisation)
-const _spf = new Uint16Array(MAX_N + 1);
-for (let i = 0; i <= MAX_N; i++) _spf[i] = i;
-for (let i = 2; i * i <= MAX_N; i++)
-    if (_spf[i] === i) for (let j = i * i; j <= MAX_N; j += i)
-        if (_spf[j] === j) _spf[j] = i;
 
 function factorise(n) {
     // Returns Map { prime → exponent }
     const f = new Map();
     while (n > 1) {
         const p = _spf[n];
+        if (p <= 1) break;
         let e = 0;
         while (n % p === 0) { n = Math.floor(n / p); e++; }
         f.set(p, e);
@@ -49,12 +27,7 @@ function factorise(n) {
     return f;
 }
 
-function mobius(n) {
-    if (n === 1) return 1;
-    const f = factorise(n);
-    for (const e of f.values()) if (e > 1) return 0;
-    return f.size % 2 === 0 ? 1 : -1;
-}
+function mobius(n) { return sharedMobius(n, _spf); }
 
 function divisorCount(n) {
     if (n === 1) return 1;

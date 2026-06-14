@@ -63,8 +63,9 @@ export function cancelPendingZetaRequests() {
 // Request a zeta offset recompute. Returns a promise that resolves when the latest request lands.
 // Older in-flight requests are abandoned (their reqId won't match).
 export function requestZetaOffsets(N, amplitude, spacing) {
+    // cancelPendingZetaRequests already bumps _zetaReqId, giving this request a
+    // fresh id that supersedes any in-flight one.
     cancelPendingZetaRequests();
-    _zetaReqId++;
     const id = _zetaReqId;
     return new Promise(resolve => {
         _zetaResolveLast = ok => resolve(ok === true);

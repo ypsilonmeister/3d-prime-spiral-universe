@@ -8,15 +8,20 @@ import { initWorker, isWorkerReady, setWorkerReady } from './worker-client.js';
 import { buildSieve } from '../shared/sieve.js';
 import { computeNtlTables } from '../shared/arithmetic.js';
 
-import { calculateTargetPositions } from './render/lattice.js';
 import { createParticles, classifyNumbers } from './render/particles.js';
 import { animate, setFrameTickCallback, setSieveTickCallback } from './render/loop.js';
 
 import { initElements, setBootStage, hideBootOverlay, buildTypeUI, updateUI, setupHelpTooltips } from './ui/panels.js';
 import { bindUIEvents, toggleType } from './ui/bindings.js';
 
-import { initModeManager, setUIDisabledStateUpdateCallback } from './modes/mode-manager.js';
+import { initModeManager, setUIDisabledStateUpdateCallback, rebuildPositions } from './modes/mode-manager.js';
 import { sieveTick, sieveUpdateStats, setSieveCallbacks } from './modes/sieve-anim.js';
+
+// Debug/test handle: exposes the app state so end-to-end tests can assert on
+// committed positions. Harmless for a visualization with no secrets.
+if (typeof window !== 'undefined') {
+    window.__APP_STATE__ = state;
+}
 
 function onWindowResize() {
     const W = window.innerWidth;
@@ -148,9 +153,12 @@ function init() {
 
     bindUIEvents(enterVR);
 
-    calculateTargetPositions();
+    // Build the lattice AND commit it into the live target buffer. Using
+    // rebuildPositions (not bare calculateTargetPositions) ensures the points
+    // lerp toward the lattice instead of collapsing to the origin.
+    rebuildPositions();
     updateUI();
-    
+
     state.renderer.setAnimationLoop(animate);
 }
 

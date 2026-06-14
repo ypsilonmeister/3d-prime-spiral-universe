@@ -4,8 +4,8 @@
 //   - Number Theoretic tables (d, sigma, omega, mu, phi)
 //   - Riemann zeta wave offsets
 
-// First 100 non-trivial zeros of the Riemann zeta function (imaginary parts γ_n)
-// Source: Andrew Odlyzko's tables — must match main.js
+// Riemann zeta zeros and number-theory primitives are shared with the main
+// thread and sub-apps via shared/ — single source of truth, no drift.
 import { ZETA_ZEROS } from './shared/zeta-zeros.js';
 import { buildSieve } from './shared/sieve.js';
 import { computeNtlTables } from './shared/arithmetic.js';

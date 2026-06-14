@@ -2,9 +2,9 @@
 
 import { state } from '../state.js';
 import { getElement, updateUI, updateTypeUI, updateUIDisabledState } from './panels.js';
-import { calculateTargetPositions, applyPositionOverlays } from '../render/lattice.js';
+import { applyPositionOverlays } from '../render/lattice.js';
 import { updateParticleVisuals, clearAboveActive } from '../render/particles.js';
-import { toggleMode, onCountChange, isOverlayActive } from '../modes/mode-manager.js';
+import { toggleMode, onCountChange, isOverlayActive, rebuildPositions } from '../modes/mode-manager.js';
 import { computeZetaOffsets } from '../modes/zeta.js';
 import { computePadicValuations, applyPadicPositions, updatePadicColorVisuals } from '../modes/padic.js';
 import { computePrimeDimValuations, applyPrimeDimPositions, buildPrimeDimAxisObjects, removePrimeDimAxisObjects, updatePrimeDimVisuals } from '../modes/prime-dim.js';
@@ -32,7 +32,7 @@ export function bindUIEvents(enterVRCallback) {
     if (layoutSelect) {
         layoutSelect.addEventListener('change', (e) => {
             state.currentLayout = e.target.value;
-            calculateTargetPositions();
+            rebuildPositions();
             updateUI();
         });
     }
@@ -41,7 +41,7 @@ export function bindUIEvents(enterVRCallback) {
     if (fillmodeSelect) {
         fillmodeSelect.addEventListener('change', (e) => {
             state.currentFillMode = e.target.value;
-            calculateTargetPositions();
+            rebuildPositions();
             updateUI();
         });
     }
@@ -436,7 +436,7 @@ export function bindUIEvents(enterVRCallback) {
     }
 
     // 7. Spacing, stride, point count sliders
-    const recomputeLattice = rafThrottle(() => calculateTargetPositions());
+    const recomputeLattice = rafThrottle(() => rebuildPositions());
 
     const spacingSlider = getElement('spacing-slider');
     if (spacingSlider) {

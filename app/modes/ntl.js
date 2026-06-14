@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { state } from '../state.js';
 import { applyPositionOverlays } from '../render/lattice.js';
-import { updateParticleVisuals, isCompositeVisible, clearAboveActive } from '../render/particles.js';
+import { isCompositeVisible, clearAboveActive } from '../render/particles.js';
 
 const HC_NUMBERS = new Set([1,2,4,6,12,24,36,48,60,120,180,240,360,720,840,1260,1680,2520,5040,7560,10080,15120,20160,25200,27720,45360,50400,55440,83160,110880,166320,221760,277200,332640]);
 const PERFECT_NUMBERS = new Set([6, 28, 496, 8128]);

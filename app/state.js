@@ -100,26 +100,3 @@ export const state = {
     vrSupported: false,
     lastTapTime: 0
 };
-
-// Simple subscription/event system for state changes
-const listeners = new Set();
-
-export function subscribe(callback) {
-    listeners.add(callback);
-    return () => listeners.delete(callback);
-}
-
-export function updateState(updates) {
-    let changed = false;
-    for (const [key, val] of Object.entries(updates)) {
-        if (state[key] !== val) {
-            state[key] = val;
-            changed = true;
-        }
-    }
-    if (changed) {
-        for (const callback of listeners) {
-            callback(state);
-        }
-    }
-}

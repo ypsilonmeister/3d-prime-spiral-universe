@@ -115,7 +115,47 @@ test.describe('PrimeCrystal Basic Verification', () => {
     await expect(page.locator('#count-val')).toHaveText('50,000');
   });
 
+  test('lattice targets are committed and do not collapse to origin', async ({ page }) => {
+    // Regression guard for the position-commit bug: calculateTargetPositions()
+    // only fills baseTargetPositions, so every lattice change must be committed
+    // into targetPositions via rebuildPositions(). If it is not, targetPositions
+    // stays all-zero and the points lerp into a single blob at the origin.
+    await page.waitForTimeout(2500); // let the lerp settle onto the targets
+
+    const stats = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const n = s.activePointCount;
+      const tp = s.targetPositions;
+      const pos = s.geometry.attributes.position.array;
+      let maxTarget = 0, maxPos = 0;
+      for (let i = 0; i < n * 3; i++) {
+        const at = Math.abs(tp[i]);  if (at > maxTarget) maxTarget = at;
+        const ap = Math.abs(pos[i]); if (ap > maxPos)    maxPos = ap;
+      }
+      return { maxTarget, maxPos };
+    });
+
+    // Cube layout (range 45) × spacing 65 ⇒ targets reach ~2900 units.
+    expect(stats.maxTarget).toBeGreaterThan(500);
+    // Live points must have spread toward the lattice, not collapsed to ~0.
+    expect(stats.maxPos).toBeGreaterThan(500);
+  });
+
+  test('changing layout recomputes committed lattice targets', async ({ page }) => {
+    const sample = () => page.evaluate(() =>
+      Array.from(window.__APP_STATE__.targetPositions.slice(0, 30)));
+
+    const before = await sample();
+    await page.locator('#layout-select').selectOption('gyroid');
+    await page.waitForTimeout(200);
+    const after = await sample();
+
+    // The committed target buffer must actually change when the layout changes.
+    expect(after).not.toEqual(before);
+  });
+
   test('should capture initial rendering screenshot', async ({ page }) => {
+    await page.waitForTimeout(2500); // capture the settled lattice, not the initial cloud
     await page.screenshot({ path: 'test-results/initial-render.png' });
   });
 });

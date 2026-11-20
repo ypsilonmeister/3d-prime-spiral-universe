@@ -40,7 +40,8 @@ export function initWorker(onProgress) {
             } else if (m.type === 'zeta_done') {
                 // Apply only if it's the latest request (drop stale results)
                 if (m.reqId === _zetaReqId) {
-                    state.zetaOffsets = m.offsets;
+                    state.zetaOffsets = m.offsets;       // normalized (visual)
+                    state.zetaOffsetsRaw = m.rawOffsets; // unnormalized sum
                     if (_zetaResolveLast) {
                         _zetaResolveLast(true);
                         _zetaResolveLast = null;

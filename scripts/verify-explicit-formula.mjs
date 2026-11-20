@@ -2,7 +2,7 @@
 // Quantitative check of the Riemann–von Mangoldt explicit formula (no UI, no dependencies).
 //   node scripts/verify-explicit-formula.mjs
 //
-// psi(x)  = x - sum_rho 2Re(x^rho/rho) - ln(2pi) - (1/2)ln(1 - x^-2)            [Davenport ch.17; Montgomery-Vaughan Thm 12.5]
+// psi0(x) = x - sum_{rho: Im rho>0} 2Re(x^rho/rho) - ln(2pi) - (1/2)ln(1 - x^-2)            [psi0 = psi with midpoint value at jumps; sum over Im rho>0 only (conjugates folded into 2Re); Davenport ch.17; Montgomery-Vaughan Thm 12.5]
 // psi1(x) = sum_{n<=x} Lambda(n)(x-n) = int_0^x psi(t)dt
 //         = x^2/2 - sum_rho x^(rho+1)/(rho(rho+1)) - (zeta'/zeta(0)) x + zeta'/zeta(-1)
 //           - sum_{k>=1} x^(1-2k)/(2k(2k-1))

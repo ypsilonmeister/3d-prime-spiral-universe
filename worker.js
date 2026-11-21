@@ -12,6 +12,7 @@ import { computeNtlTables } from './shared/arithmetic.js';
 import {
     buildZetaDenom, buildLnSqrtCaches, accumulateZeroSumPsi,
     maxAbs as maxAbsOf, zetaNormScale, scaleInto,
+    buildPsiTables, computeExplicitBase, computeExplicitRecon,
 } from './shared/explicit-formula.js';
 
 let MAX = 0;
@@ -21,6 +22,9 @@ let _zetaDenom = null;
 // Cache of the unnormalized zero sum: S (Float64 positive partial sum, raw = -2S), raw (Float32), maxAbs.
 // Valid for the current MAX and cached N only; amplitude/spacing never invalidate it.
 let _zetaCache = null;
+let _spf = null;       // smallest-prime-factor table kept for the explicit-formula mode
+let _psiTables = null; // buildPsiTables(MAX, _spf), built lazily
+let _explicitXs = null; // samples of the latest explicit_base request (xMax, M, xs)
 
 function progress(stage, pct) {
     self.postMessage({ type: 'progress', stage, pct });
@@ -33,6 +37,8 @@ function buildSieves(maxPoints) {
     progress('primes', 0);
     const { isPrime, gaps, spf } = buildSieve(MAX);
     progress('primes', 100);
+    _spf = spf;
+    _psiTables = null;
 
     // ---- d(n), sigma(n), omega(n), mu(n), phi(n) via shared arithmetic ----
     const { ntl_d, ntl_sigma, ntl_omega, ntl_mu, ntl_phi } = computeNtlTables(MAX, spf, progress);
@@ -97,6 +103,21 @@ self.onmessage = (e) => {
             tables.ntl_omega.buffer, tables.ntl_mu.buffer,
             tables.ntl_phi.buffer,
         ]);
+    } else if (msg.type === 'explicit_base') {
+        // Measured psi1 - x^2/2 and RH-assumed bound at M log-spaced samples in [2, xMax].
+        if (!_psiTables) _psiTables = buildPsiTables(MAX, _spf);
+        const xMax = Math.min(msg.xMax, MAX);
+        const base = computeExplicitBase(xMax, msg.M, _psiTables);
+        _explicitXs = { xMax, M: msg.M, xs: base.xs };
+        // xs stays cached for explicit_recon, so transfer a copy (a transferred buffer would be detached here).
+        const out = { ...base, xs: new Float64Array(base.xs) };
+        self.postMessage({ type: 'explicit_done', kind: 'base', reqId: msg.reqId, ...out },
+            [out.xs.buffer, out.meas.buffer, out.bound.buffer]);
+    } else if (msg.type === 'explicit_recon') {
+        const xs = _explicitXs && _explicitXs.xMax === msg.xMax && _explicitXs.M === msg.M
+            ? _explicitXs.xs : computeExplicitBase(msg.xMax, msg.M, _psiTables || (_psiTables = buildPsiTables(MAX, _spf))).xs;
+        const recon = computeExplicitRecon(xs, msg.N, ZETA_ZEROS);
+        self.postMessage({ type: 'explicit_done', kind: 'recon', reqId: msg.reqId, recon }, [recon.buffer]);
     } else if (msg.type === 'zeta') {
         const { raw, normalized, recomputed } = computeZetaOffsets(msg.N, msg.amplitude, msg.spacing);
         // offsets = normalized (backward compatible); rawOffsets = unnormalized sum

@@ -15,6 +15,8 @@ export function onWorkerFailure(cb) {
     _failureListeners.push(cb);
 }
 
+const EXPLICIT_TIMEOUT_MS = 20000;   // no reply in this long => treat the worker as dead (no onerror needed)
+
 function handleWorkerError(e, rejectInit) {
     const wasReady = _workerReady;
     _workerReady = false;
@@ -111,7 +113,18 @@ export function requestExplicit(msg) {
     const id = ++_explicitReqId;
     return new Promise((resolve, reject) => {
         if (!_workerReady) { reject(new Error('worker unavailable')); return; }
-        _explicitPending.set(id, { resolve, reject });
+        const ms = state.explicitRequestTimeoutMs || EXPLICIT_TIMEOUT_MS;
+        const timer = setTimeout(() => {
+            if (!_explicitPending.has(id)) return;
+            // Silent death (terminate() without an error event): same recovery as an error notification.
+            const w = _worker;
+            try { w && w.terminate(); } catch (x) { /* already gone */ }
+            handleWorkerError(new Error('worker request timed out'), () => {});
+        }, ms);
+        _explicitPending.set(id, {
+            resolve: v => { clearTimeout(timer); resolve(v); },
+            reject: e => { clearTimeout(timer); reject(e); },
+        });
         _worker.postMessage({ ...msg, reqId: id });
     });
 }

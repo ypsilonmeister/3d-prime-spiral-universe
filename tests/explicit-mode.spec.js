@@ -209,4 +209,73 @@ test.describe('explicit formula mode', () => {
     expect(n).toBe(5);
     await setN(page, 50); // still interactive afterwards
   });
+  // ---- review #291 regressions -------------------------------------------
+
+  test('Zeta animation running at entry resumes after exit (and keeps advancing)', async ({ page }) => {
+    test.setTimeout(120_000);
+    await boot(page);
+    await page.evaluate(() => { window.__APP_STATE__.zetaZeroCount = 40; });
+    await page.locator('#zeta-anim-btn').evaluate(el => el.click());
+    await expect.poll(() => page.evaluate(() => window.__APP_STATE__.zetaZeroCount), { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+    await enter(page);
+    await expect.poll(() => page.evaluate(() => window.__APP_STATE__.zetaAnimating)).toBe(false);
+    await setN(page, 30);
+    await enter(page); // exit
+    const at = await page.evaluate(() => window.__APP_STATE__.zetaZeroCount);
+    expect(at).toBeGreaterThanOrEqual(2);
+    expect(at).toBeLessThan(40);
+    expect(await page.evaluate(() => window.__APP_STATE__.zetaAnimating)).toBe(true);
+    await expect(page.locator('#zeta-anim-btn')).toHaveText('Stop');
+    await page.waitForTimeout(1500);
+    const later = await page.evaluate(() => window.__APP_STATE__.zetaZeroCount);
+    expect(later).toBeGreaterThan(at);
+    // and it still runs to the original target and stops by itself
+    await expect.poll(() => page.evaluate(() => window.__APP_STATE__.zetaAnimating), { timeout: 60_000 }).toBe(false);
+    expect(await page.evaluate(() => window.__APP_STATE__.zetaZeroCount)).toBe(40);
+  });
+
+  test('Zeta animation stopped before entry stays stopped after exit', async ({ page }) => {
+    test.setTimeout(120_000);
+    await boot(page);
+    await zetaToggle(page);
+    await page.evaluate(() => { window.__APP_STATE__.zetaZeroCount = 7; });
+    await enter(page);
+    await expect.poll(async () => { const i = await info(page); return i && i.N != null && !i.pending; }, { timeout: 30_000 }).toBe(true);
+    await enter(page);
+    await page.waitForTimeout(900);
+    const r = await page.evaluate(() => ({ anim: window.__APP_STATE__.zetaAnimating, n: window.__APP_STATE__.zetaZeroCount }));
+    expect(r).toEqual({ anim: false, n: 7 });
+    await expect(page.locator('#zeta-anim-btn')).toHaveText('Animate');
+  });
+
+  test('exit with Zeta Wave ON sends exactly one zeta request', async ({ page }) => {
+    test.setTimeout(120_000);
+    await spyWorkers(page);
+    await boot(page);
+    await zetaToggle(page);
+    await page.evaluate(() => { window.__APP_STATE__.zetaZeroCount = 7; });
+    await enter(page);
+    await expect.poll(async () => { const i = await info(page); return i && i.N != null && !i.pending; }, { timeout: 30_000 }).toBe(true);
+    await page.evaluate(() => { window.__posted.length = 0; });
+    await enter(page);
+    await page.waitForTimeout(500);
+    const posted = await page.evaluate(() => window.__posted.slice());
+    expect(posted.filter(t => t === 'zeta')).toEqual(['zeta']);
+  });
+  test('worker silently stops answering (no error event): request timeout recovers to M=400', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.addInitScript(() => {
+      const Orig = window.Worker;
+      window.Worker = class extends Orig {
+        postMessage(m, ...r) { if (window.__mute && m && /^explicit_/.test(m.type)) return; return super.postMessage(m, ...r); }
+      };
+    });
+    await boot(page);
+    await page.evaluate(() => { window.__mute = true; window.__APP_STATE__.explicitRequestTimeoutMs = 1500; });
+    await enter(page);
+    await expect.poll(async () => { const i = await info(page); return i && i.fallback === true && i.M === 400 && !i.pending && i.N != null; },
+      { timeout: 30_000 }).toBe(true);
+    await expect(page.locator('#explicit-status')).toHaveText('(fallback mode: reduced samples)');
+    await setN(page, 50);
+  });
 });

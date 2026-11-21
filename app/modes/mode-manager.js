@@ -57,7 +57,7 @@ export function toggleMode(id) {
         if (activeOwner === mode) {
             // Exit active owner — rebuild the base lattice, re-apply overlays,
             // then repaint colors/sizes.
-            activeOwner.exit();
+            activeOwner.exit({ willRebuild: true });
             activeOwner = null;
             rebuildPositions();
             updateParticleVisuals();

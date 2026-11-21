@@ -14,6 +14,7 @@ import {
 } from '../../shared/explicit-formula.js';
 import { isWorkerReady, requestExplicit, cancelExplicitRequests, onWorkerFailure } from '../worker-client.js';
 import { computeZetaOffsets } from './zeta.js';
+import { stopZetaAnimation, runZetaAnimation, zetaAnimTarget } from './zeta-anim.js';
 
 export const EXPLICIT_SAMPLES = 1600;
 export const EXPLICIT_SAMPLES_FALLBACK = 400;
@@ -28,6 +29,7 @@ let token = 0;            // bumps on every full rebuild / exit; stale async res
 let cache = null;         // { xMax, M, fallback, xs, meas, bound, head, frames, dMeas, shell }
 let reconSeq = 0;
 let prevPointsVisible = true;
+let savedAnim = null;     // { n, target } of a Zeta animation running at entry, resumed on exit
 let savedZetaN = null;    // zetaZeroCount at entry, restored on exit
 let syncTables = null;    // { max, tables } for the fallback path
 
@@ -304,13 +306,10 @@ export const explicitMode = {
         state.explicitModeActive = true;
         savedZetaN = state.zetaZeroCount;
         // Pause the Zeta Wave's own N-driven work (animation); its recompute is gated in computeZetaOffsets.
+        savedAnim = null;
         if (state.zetaAnimating) {
-            state.zetaAnimating = false;
-            clearTimeout(state.zetaAnimFrame);
-            if (typeof document !== 'undefined') {
-                const b = document.getElementById('zeta-anim-btn');
-                if (b) b.textContent = 'Animate';
-            }
+            savedAnim = { n: state.zetaZeroCount, target: zetaAnimTarget() };
+            stopZetaAnimation();
         }
         if (!(state.zetaZeroCount > 0)) state.zetaZeroCount = DEFAULT_N;
         state.zetaZeroCount = Math.min(state.zetaZeroCount, ZETA_ZEROS.length);
@@ -319,7 +318,8 @@ export const explicitMode = {
         state.explicitInfo = null;
         fullRebuild();
     },
-    exit() {
+    // opts.willRebuild: the caller rebuilds the lattice (and the Zeta Wave) right after, so don't recompute here.
+    exit(opts = {}) {
         state.explicitModeActive = false;
         token++;
         cancelExplicitRequests();
@@ -330,8 +330,14 @@ export const explicitMode = {
         setStatus('');
         // Hand N back to the Zeta Wave exactly as it was, and resync it if it is still on.
         if (savedZetaN != null) { state.zetaZeroCount = savedZetaN; savedZetaN = null; }
-        if (state.zetaModeActive) computeZetaOffsets(state.zetaZeroCount);
-        else syncZetaNRestore();
+        const anim = savedAnim; savedAnim = null;
+        if (anim && state.zetaModeActive) {
+            // resume the sweep where it was paused (the lattice rebuild applies the current N)
+            runZetaAnimation(anim.n, anim.target, { apply: false });
+            if (!opts.willRebuild) computeZetaOffsets(anim.n);
+        } else if (state.zetaModeActive) {
+            if (!opts.willRebuild) computeZetaOffsets(state.zetaZeroCount);
+        } else syncZetaNRestore();
     },
     // N slider: only the reconstruction ribbon is recomputed (measured + shell stay cached).
     onNChange() {

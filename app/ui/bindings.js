@@ -6,6 +6,7 @@ import { applyPositionOverlays } from '../render/lattice.js';
 import { updateParticleVisuals, clearAboveActive } from '../render/particles.js';
 import { toggleMode, onCountChange, isOverlayActive, rebuildPositions } from '../modes/mode-manager.js';
 import { computeZetaOffsets } from '../modes/zeta.js';
+import { runZetaAnimation, stopZetaAnimation } from '../modes/zeta-anim.js';
 import { explicitMode } from '../modes/explicit.js';
 import { computePadicValuations, applyPadicPositions, updatePadicColorVisuals } from '../modes/padic.js';
 import { computePrimeDimValuations, applyPrimeDimPositions, buildPrimeDimAxisObjects, removePrimeDimAxisObjects, updatePrimeDimVisuals } from '../modes/prime-dim.js';
@@ -164,37 +165,12 @@ export function bindUIEvents(enterVRCallback) {
         zetaAnimBtn.addEventListener('click', () => {
             if (state.explicitModeActive) return;   // the explicit-formula mode owns N
             if (state.zetaAnimating) {
-                state.zetaAnimating = false;
-                zetaAnimBtn.textContent = 'Animate';
+                stopZetaAnimation();
                 return;
             }
-            state.zetaAnimating = true;
-            zetaAnimBtn.textContent = 'Stop';
             if (!state.zetaModeActive) toggleMode('zeta');
-            
             const target = state.zetaZeroCount > 0 ? state.zetaZeroCount : 100;
-            state.zetaZeroCount = 0;
-            zetaNSlider.value = 0;
-            getElement('zeta-n-val').innerText = 0;
-            computeZetaOffsets(0);
-            
-            let n = 0;
-            const step = () => {
-                if (!state.zetaAnimating || n >= target) {
-                    state.zetaAnimating = false;
-                    zetaAnimBtn.textContent = 'Animate';
-                    return;
-                }
-                if (state.explicitModeActive) { state.zetaAnimating = false; zetaAnimBtn.textContent = 'Animate'; return; }
-                n++;
-                state.zetaZeroCount = n;
-                zetaNSlider.value = n;
-                getElement('zeta-n-val').innerText = n;
-                computeZetaOffsets(n);
-                const delay = n < 10 ? 500 : n < 30 ? 300 : n < 60 ? 150 : 80;
-                state.zetaAnimFrame = setTimeout(step, delay);
-            };
-            state.zetaAnimFrame = setTimeout(step, 300);
+            runZetaAnimation(0, target);
         });
     }
 

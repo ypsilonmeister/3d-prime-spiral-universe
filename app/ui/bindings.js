@@ -135,8 +135,11 @@ export function bindUIEvents(enterVRCallback) {
         });
     }
 
-    const recomputeZeta = rafThrottle(() => {
+    // queuedInExplicit: the request was queued while the explicit mode owned N; if the mode was left
+    // before the frame ran, drop it (exit() already handed N back and resynced the Zeta Wave).
+    const recomputeZeta = rafThrottle((queuedInExplicit) => {
         if (state.explicitModeActive) { explicitMode.onNChange(); return; }
+        if (queuedInExplicit) return;
         if (state.zetaModeActive) {
             computeZetaOffsets(state.zetaZeroCount);
         }
@@ -147,7 +150,7 @@ export function bindUIEvents(enterVRCallback) {
         zetaNSlider.addEventListener('input', (e) => {
             state.zetaZeroCount = parseInt(e.target.value);
             getElement('zeta-n-val').innerText = state.zetaZeroCount;
-            recomputeZeta();
+            recomputeZeta(state.explicitModeActive);
         });
     }
 
@@ -156,7 +159,7 @@ export function bindUIEvents(enterVRCallback) {
         zetaAmpSlider.addEventListener('input', (e) => {
             state.zetaAmplitude = parseFloat(e.target.value);
             getElement('zeta-amp-val').innerText = state.zetaAmplitude.toFixed(1);
-            recomputeZeta();
+            recomputeZeta(state.explicitModeActive);
         });
     }
 

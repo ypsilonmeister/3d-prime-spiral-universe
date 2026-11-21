@@ -5,6 +5,7 @@ import { state } from '../state.js';
 import { computeZetaOffsets } from './zeta.js';
 
 let target = 0;
+let current = 0;   // the sweep's real tick position (state.zetaZeroCount can be moved by the slider)
 
 function el(id) { return typeof document === 'undefined' ? null : document.getElementById(id); }
 
@@ -20,6 +21,7 @@ function showN(n) {
 }
 
 export function zetaAnimTarget() { return target; }
+export function zetaAnimN() { return current; }
 
 export function stopZetaAnimation() {
     state.zetaAnimating = false;
@@ -30,6 +32,7 @@ export function stopZetaAnimation() {
 // Run the sweep from n (already applied by the caller or applied here when `apply`) up to `tgt`.
 export function runZetaAnimation(n, tgt, { apply = true } = {}) {
     target = tgt;
+    current = n;
     clearTimeout(state.zetaAnimFrame);
     state.zetaAnimating = true;
     setButton('Stop');
@@ -42,9 +45,16 @@ export function runZetaAnimation(n, tgt, { apply = true } = {}) {
             return;
         }
         n++;
+        current = n;
         state.zetaZeroCount = n;
         showN(n);
         computeZetaOffsets(n);
+        // computeZetaOffsets clamps the shown N to the effective (fallback) cap: the sweep ends there too.
+        if (state.zetaZeroCount < n) {
+            current = n = state.zetaZeroCount;
+            stopZetaAnimation();
+            return;
+        }
         const delay = n < 10 ? 500 : n < 30 ? 300 : n < 60 ? 150 : 80;
         state.zetaAnimFrame = setTimeout(step, delay);
     };

@@ -278,4 +278,59 @@ test.describe('explicit formula mode', () => {
     await expect(page.locator('#explicit-status')).toHaveText('(fallback mode: reduced samples)');
     await setN(page, 50);
   });
+  // ---- review #293 regressions -------------------------------------------
+
+  test('slider change before entry does not overwrite the animation progress on resume', async ({ page }) => {
+    test.setTimeout(120_000);
+    await boot(page);
+    await zetaToggle(page);
+    await page.evaluate(async () => {
+      const m = await import('/app/modes/zeta-anim.js');
+      m.runZetaAnimation(1, 12);
+      // slider moved and mode entered before the next animation tick
+      const el = document.getElementById('zeta-n-slider');
+      el.value = '30'; el.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('#group-explicit-toggle .toggle-row').click();
+    });
+    await expect.poll(async () => { const i = await info(page); return i && i.N != null && !i.pending; }, { timeout: 30_000 }).toBe(true);
+    await enter(page); // exit
+    const at = await page.evaluate(() => ({ n: window.__APP_STATE__.zetaZeroCount, anim: window.__APP_STATE__.zetaAnimating }));
+    expect(at.anim).toBe(true);
+    expect(at.n).toBeLessThan(12);
+    await expect.poll(() => page.evaluate(() => window.__APP_STATE__.zetaAnimating), { timeout: 60_000 }).toBe(false);
+    expect(await page.evaluate(() => window.__APP_STATE__.zetaZeroCount)).toBe(12);
+  });
+
+  test('N input and exit in the same frame send exactly one zeta request', async ({ page }) => {
+    test.setTimeout(120_000);
+    await spyWorkers(page);
+    await boot(page);
+    await zetaToggle(page);
+    await page.evaluate(() => { window.__APP_STATE__.zetaZeroCount = 7; });
+    await enter(page);
+    await expect.poll(async () => { const i = await info(page); return i && i.N != null && !i.pending; }, { timeout: 30_000 }).toBe(true);
+    await page.evaluate(() => { window.__posted.length = 0; });
+    await page.evaluate(() => {
+      const el = document.getElementById('zeta-n-slider');
+      el.value = '200'; el.dispatchEvent(new Event('input', { bubbles: true }));
+      document.querySelector('#group-explicit-toggle .toggle-row').click();
+    });
+    await page.waitForTimeout(600);
+    const posted = await page.evaluate(() => window.__posted.slice());
+    expect(posted.filter(t => t === 'zeta')).toEqual(['zeta']);
+    expect(await page.evaluate(() => window.__APP_STATE__.zetaZeroCount)).toBe(7);
+  });
+
+  test('animation stops when the fallback cap is reached', async ({ page }) => {
+    test.setTimeout(120_000);
+    await boot(page, { blockWorker: true });
+    await zetaToggle(page);
+    await page.evaluate(async () => {
+      const m = await import('/app/modes/zeta-anim.js');
+      m.runZetaAnimation(99, 120);
+    });
+    await expect.poll(() => page.evaluate(() => window.__APP_STATE__.zetaAnimating), { timeout: 10_000 }).toBe(false);
+    await expect(page.locator('#zeta-anim-btn')).toHaveText('Animate');
+    expect(await page.evaluate(() => window.__APP_STATE__.zetaZeroCount)).toBe(100);
+  });
 });

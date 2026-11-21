@@ -14,7 +14,7 @@ import {
 } from '../../shared/explicit-formula.js';
 import { isWorkerReady, requestExplicit, cancelExplicitRequests, onWorkerFailure } from '../worker-client.js';
 import { computeZetaOffsets } from './zeta.js';
-import { stopZetaAnimation, runZetaAnimation, zetaAnimTarget } from './zeta-anim.js';
+import { stopZetaAnimation, runZetaAnimation, zetaAnimTarget, zetaAnimN } from './zeta-anim.js';
 
 export const EXPLICIT_SAMPLES = 1600;
 export const EXPLICIT_SAMPLES_FALLBACK = 400;
@@ -308,7 +308,7 @@ export const explicitMode = {
         // Pause the Zeta Wave's own N-driven work (animation); its recompute is gated in computeZetaOffsets.
         savedAnim = null;
         if (state.zetaAnimating) {
-            savedAnim = { n: state.zetaZeroCount, target: zetaAnimTarget() };
+            savedAnim = { n: zetaAnimN(), target: zetaAnimTarget() };
             stopZetaAnimation();
         }
         if (!(state.zetaZeroCount > 0)) state.zetaZeroCount = DEFAULT_N;

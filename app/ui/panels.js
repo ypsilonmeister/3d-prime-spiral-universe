@@ -20,7 +20,7 @@ export function initElements() {
         'sieve-stats', 'composite-select', 'vr-btn', 'count-val', 'count-slider',
         'spacing-val', 'spacing-slider', 'range-info', 'current-state-text',
         'ui-overlay', 'show-ui-hint', 'help-tooltip', 'group-lattice', 'group-spacing',
-        'group-zeta-toggle', 'group-padic-toggle', 'group-primedim-toggle'
+        'group-zeta-toggle', 'group-explicit-toggle', 'sw-explicit', 'group-padic-toggle', 'group-primedim-toggle'
     ];
     for (const id of ids) {
         elements[id] = document.getElementById(id);
@@ -79,14 +79,16 @@ export function setGroupDisabled(id, disabled) {
 export function updateUIDisabledState() {
     const padic = state.padicModeActive;
     const pdim  = state.primeDimModeActive;
+    const explicit = state.explicitModeActive;
     const exclusivePos = padic || pdim;
-    setGroupDisabled('group-lattice',        exclusivePos);
-    setGroupDisabled('group-spacing',        exclusivePos);
-    setGroupDisabled('group-zeta-toggle',    exclusivePos);
+    setGroupDisabled('group-lattice',        exclusivePos || explicit);
+    setGroupDisabled('group-spacing',        exclusivePos || explicit);
+    setGroupDisabled('group-zeta-toggle',    exclusivePos || explicit);
+    setGroupDisabled('group-explicit-toggle', exclusivePos);
     setGroupDisabled('zeta-controls',        exclusivePos);
-    setGroupDisabled('group-padic-toggle',   pdim);
+    setGroupDisabled('group-padic-toggle',   pdim || explicit);
     setGroupDisabled('padic-controls',       pdim);
-    setGroupDisabled('group-primedim-toggle', padic);
+    setGroupDisabled('group-primedim-toggle', padic || explicit);
     setGroupDisabled('primedim-controls',    padic);
 }
 
@@ -117,7 +119,13 @@ export function updateUI() {
     if (typePanel) typePanel.style.display = (state.colorMode === 'types') ? '' : 'none';
 
     if (elements['sw-zeta']) elements['sw-zeta'].classList.toggle('on', state.zetaModeActive);
-    if (elements['zeta-controls']) elements['zeta-controls'].style.display = state.zetaModeActive ? '' : 'none';
+    if (elements['zeta-controls']) elements['zeta-controls'].style.display = (state.zetaModeActive || state.explicitModeActive) ? '' : 'none';
+    // Amplitude / Animate only apply to the zeta wave overlay; explicit mode shares just the N slider.
+    const waveOnly = document.getElementById('zeta-wave-only');
+    if (waveOnly) waveOnly.style.display = state.zetaModeActive ? '' : 'none';
+    if (elements['sw-explicit']) elements['sw-explicit'].classList.toggle('on', state.explicitModeActive);
+    const expCtl = document.getElementById('explicit-controls');
+    if (expCtl) expCtl.style.display = state.explicitModeActive ? '' : 'none';
 
     if (elements['sw-padic']) elements['sw-padic'].classList.toggle('on', state.padicModeActive);
     if (elements['padic-controls']) elements['padic-controls'].style.display = state.padicModeActive ? '' : 'none';

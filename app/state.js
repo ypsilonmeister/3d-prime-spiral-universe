@@ -79,6 +79,10 @@ export const state = {
     zetaOffsets: new Float32Array(320000),
     zetaOffsetsRaw: new Float32Array(320000), // unnormalized -sum 2Re(x^rho/rho), from worker
 
+    // Explicit formula mode (owner)
+    explicitModeActive: false,
+    explicitInfo: null, // read-only snapshot of the latest computation (M, N, rms, shell ring xs, fallback flag)
+
     // Math buffers loaded from worker
     isPrimeArray: new Uint8Array(320000 + 1),
     primeGaps: new Uint8Array(320000 + 2),

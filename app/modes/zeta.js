@@ -37,9 +37,15 @@ function _computeZetaSyncFallback(N) {
 // Keep the visible N (slider range, label, state) equal to the N actually computed.
 // In fallback the slider max follows the effective cap and a note says so; with the
 // worker ready the full range (1000) is restored.
+export function zetaEffectiveMaxN() {
+    return isWorkerReady()
+        ? ZETA_ZEROS.length
+        : Math.min(ZETA_SYNC_FALLBACK_MAX_N, ZETA_ZEROS.length);
+}
+
 export function syncZetaNControl() {
     const fallback = !isWorkerReady();
-    const max = fallback ? Math.min(ZETA_SYNC_FALLBACK_MAX_N, ZETA_ZEROS.length) : ZETA_ZEROS.length;
+    const max = zetaEffectiveMaxN();
     if (state.zetaZeroCount > max) state.zetaZeroCount = max;
     if (typeof document === 'undefined') return;
     const slider = document.getElementById('zeta-n-slider');
@@ -54,6 +60,9 @@ export function syncZetaNControl() {
 }
 
 export function computeZetaOffsets(N) {
+    // The explicit-formula mode owns the shared N slider/state while active; explicit.exit()
+    // calls this again to bring the Zeta Wave back in line.
+    if (state.explicitModeActive) return;
     syncZetaNControl();
     N = Math.min(N, state.zetaZeroCount);
     if (!state.zetaModeActive || N === 0) {

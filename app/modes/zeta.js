@@ -3,12 +3,10 @@
 import { state } from '../state.js';
 import { ZETA_ZEROS_1000 as ZETA_ZEROS } from '../../shared/zeta-zeros-1000.js';
 import { requestZetaOffsets, cancelPendingZetaRequests, isWorkerReady } from '../worker-client.js';
+import { buildZetaDenom, buildLnSqrtCaches, accumulateZeroSumPsi, maxAbs, zetaNormScale, scaleInto } from '../../shared/explicit-formula.js';
 import { applyPositionOverlays } from '../render/lattice.js';
 
-let _zetaSyncCachesBuilt = false;
-let _lnCacheSync = null;
-let _sqrtCacheSync = null;
-let _zetaDenomSync = null;
+let _zetaSyncCaches = null; // { ln, sq, denom, N, raw (Float32), maxAbs }
 
 // The fallback runs on the main thread (worker unavailable), so cap the effective N
 // to keep the UI responsive: N=1000 over MAX_POINTS blocked ~10s, N=100 about a tenth of that.
@@ -17,40 +15,23 @@ const ZETA_SYNC_FALLBACK_MAX_N = 100;
 function _computeZetaSyncFallback(N) {
     // also never read past the zero table (would yield NaN)
     N = Math.min(N, ZETA_SYNC_FALLBACK_MAX_N, ZETA_ZEROS.length);
-    if (!_zetaSyncCachesBuilt) {
-        _lnCacheSync = new Float64Array(state.MAX_POINTS);
-        _sqrtCacheSync = new Float64Array(state.MAX_POINTS);
-        for (let i = 0; i < state.MAX_POINTS; i++) {
-            _lnCacheSync[i] = Math.log(i + 1);
-            _sqrtCacheSync[i] = Math.sqrt(i + 1);
-        }
-        _zetaDenomSync = new Float64Array(ZETA_ZEROS.length);
-        for (let k = 0; k < ZETA_ZEROS.length; k++) {
-            const g = ZETA_ZEROS[k];
-            _zetaDenomSync[k] = 0.25 + g * g;
-        }
-        _zetaSyncCachesBuilt = true;
+    const M = state.MAX_POINTS;
+    if (!_zetaSyncCaches) {
+        const { ln, sq } = buildLnSqrtCaches(M);
+        _zetaSyncCaches = { ln, sq, denom: buildZetaDenom(ZETA_ZEROS), N: -1, raw: null, maxAbs: 0 };
     }
-    for (let i = 0; i < state.MAX_POINTS; i++) {
-        const lnx = _lnCacheSync[i], sqrtx = _sqrtCacheSync[i];
-        let sum = 0;
-        for (let k = 0; k < N; k++) {
-            const g = ZETA_ZEROS[k];
-            const angle = g * lnx;
-            sum += sqrtx * (Math.cos(angle) * 0.5 + Math.sin(angle) * g) / _zetaDenomSync[k];
-        }
-        state.zetaOffsets[i] = -2.0 * sum;
-        state.zetaOffsetsRaw[i] = -2.0 * sum;
+    const c = _zetaSyncCaches;
+    // Same policy as worker.js: the zero sum depends only on the effective N; amplitude/spacing
+    // only redo the normalization. raw is kept Float32 so max|raw| matches the worker's.
+    if (c.N !== N) {
+        const S = new Float64Array(M);
+        accumulateZeroSumPsi(S, c.ln, c.sq, ZETA_ZEROS, c.denom, 0, N);
+        const raw = new Float32Array(M);
+        for (let i = 0; i < M; i++) raw[i] = -2.0 * S[i];
+        c.N = N; c.raw = raw; c.maxAbs = maxAbs(raw);
     }
-    let maxAbs = 0;
-    for (let i = 0; i < state.MAX_POINTS; i++) {
-        const a = Math.abs(state.zetaOffsets[i]);
-        if (a > maxAbs) maxAbs = a;
-    }
-    if (maxAbs > 0) {
-        const scale = (state.currentSpacing * 8.0 * state.zetaAmplitude) / maxAbs;
-        for (let i = 0; i < state.MAX_POINTS; i++) state.zetaOffsets[i] *= scale;
-    }
+    state.zetaOffsetsRaw.set(c.raw);
+    scaleInto(state.zetaOffsets, c.raw, zetaNormScale(c.maxAbs, state.currentSpacing, state.zetaAmplitude));
 }
 
 // Keep the visible N (slider range, label, state) equal to the N actually computed.

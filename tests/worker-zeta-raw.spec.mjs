@@ -106,3 +106,20 @@ test.describe('worker zeta raw output', () => {
         expect(rms(res[1000])).toBeLessThan(rms(res[100]));
     });
 });
+
+test.describe('worker zeta raw cache', () => {
+    test('amplitude/spacing changes do not recompute the zero sum; N changes do', () => {
+        const out = JSON.parse(execFileSync(process.execPath,
+            ['--no-warnings', fileURLToPath(new URL('./helpers/worker-zeta-cache-harness.mjs', import.meta.url)), String(MAX)],
+            { encoding: 'utf8', maxBuffer: 1 << 24 }));
+        expect(out.map(r => r.recomputed)).toEqual([true, false, false, false, true, true, false, true]);
+        // normalization is still redone correctly from the cache, and raw is unchanged
+        for (const r of out.slice(0, 4)) expect(Math.abs(r.maxNorm - r.target) / r.target).toBeLessThan(1e-5);
+        expect(out[1].raw500).toBe(out[0].raw500);
+        expect(out[3].raw500).toBe(out[0].raw500);
+        // N=0 clears; back to N=100 reproduces the original raw (resume from N=100->200->100 is exact)
+        expect(out[6].maxRaw).toBe(0);
+        expect(out[7].raw500).toBe(out[0].raw500);
+        expect(out[5].raw500).toBe(out[0].raw500);
+    });
+});

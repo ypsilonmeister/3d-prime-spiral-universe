@@ -120,4 +120,93 @@ test.describe('explicit formula mode', () => {
     // the pre-existing boot-time worker-init failure log is expected here
     expect(errors.filter(e => !e.startsWith('Worker init failed'))).toEqual([]);
   });
+
+  // ---- review #289 regressions -------------------------------------------
+
+  // Records every worker instance and the message types posted to it.
+  const spyWorkers = page => page.addInitScript(() => {
+    const Orig = window.Worker;
+    window.__workers = []; window.__posted = [];
+    window.Worker = class extends Orig {
+      constructor(...a) { super(...a); window.__workers.push(this); }
+      postMessage(m, ...r) { window.__posted.push(m && m.type); return super.postMessage(m, ...r); }
+    };
+  });
+  const zetaToggle = page => page.locator('#group-zeta-toggle .toggle-row').click();
+  const sliderTo = (page, n) => page.locator('#zeta-n-slider').evaluate((el, v) => {
+    el.value = String(v); el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, n);
+
+  test('Zeta Wave ON then explicit mode: N change sends no zeta request; exit restores zeta settings', async ({ page }) => {
+    test.setTimeout(120_000);
+    await spyWorkers(page);
+    await boot(page);
+    await zetaToggle(page);
+    await page.evaluate(() => { window.__APP_STATE__.zetaZeroCount = 7; });
+    await enter(page);
+    await expect.poll(async () => { const i = await info(page); return i && i.N != null && !i.pending; }, { timeout: 30_000 }).toBe(true);
+    await page.evaluate(() => { window.__posted.length = 0; });
+    await setN(page, 200);
+    await page.waitForTimeout(300);
+    const posted = await page.evaluate(() => window.__posted.slice());
+    expect(posted).toContain('explicit_recon');
+    expect(posted).not.toContain('zeta');
+
+    await enter(page); // exit
+    const r = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      return { n: s.zetaZeroCount, zeta: s.zetaModeActive, slider: document.getElementById('zeta-n-slider').value };
+    });
+    expect(r).toEqual({ n: 7, zeta: true, slider: '7' });
+  });
+
+  test('explicit mode stops a running Zeta animation', async ({ page }) => {
+    test.setTimeout(120_000);
+    await boot(page);
+    await page.locator('#zeta-anim-btn').evaluate(el => el.click());
+    await enter(page);
+    await expect.poll(() => page.evaluate(() => window.__APP_STATE__.zetaAnimating)).toBe(false);
+    await expect(page.locator('#zeta-anim-btn')).toHaveText('Animate');
+    await setN(page, 30);
+    await page.waitForTimeout(800);
+    expect((await info(page)).N).toBe(30);
+    expect(await page.evaluate(() => window.__APP_STATE__.zetaZeroCount)).toBe(30);
+  });
+
+  test('worker blocked + Zeta ON: N=200 keeps display, state and ribbon N identical', async ({ page }) => {
+    test.setTimeout(120_000);
+    await boot(page, { blockWorker: true });
+    await zetaToggle(page);
+    await enter(page);
+    await expect(page.locator('#explicit-status')).toHaveText('(fallback mode: reduced samples)');
+    await setN(page, 200);
+    await page.waitForTimeout(500);
+    const r = await page.evaluate(() => ({
+      state: window.__APP_STATE__.zetaZeroCount,
+      shown: document.getElementById('zeta-n-val').innerText,
+      slider: document.getElementById('zeta-n-slider').value,
+    }));
+    expect((await info(page)).N).toBe(200);
+    expect(r).toEqual({ state: 200, shown: '200', slider: '200' });
+  });
+
+  test('worker dies after startup: explicit mode falls back to M=400 instead of hanging', async ({ page }) => {
+    test.setTimeout(120_000);
+    await spyWorkers(page);
+    await boot(page);
+    await enter(page);
+    await expect.poll(async () => { const i = await info(page); return i && i.N != null && !i.pending; }, { timeout: 30_000 }).toBe(true);
+    // kill while a recompute is in flight, then fire the error event
+    await page.evaluate(() => {
+      const el = document.getElementById('zeta-n-slider');
+      el.value = '500'; el.dispatchEvent(new Event('input', { bubbles: true }));
+      window.__workers[0].dispatchEvent(new ErrorEvent('error', { message: 'boom' }));
+    });
+    await expect.poll(async () => { const i = await info(page); return i && i.fallback === true && i.M === 400 && !i.pending && i.N != null; },
+      { timeout: 30_000 }).toBe(true);
+    await expect(page.locator('#explicit-status')).toHaveText('(fallback mode: reduced samples)');
+    const n = await page.evaluate(() => window.__APP_STATE__.scene.getObjectByName('explicit-group').children.length);
+    expect(n).toBe(5);
+    await setN(page, 50); // still interactive afterwards
+  });
 });

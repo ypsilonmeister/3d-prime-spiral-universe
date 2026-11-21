@@ -54,6 +54,9 @@ export function syncZetaNControl() {
 }
 
 export function computeZetaOffsets(N) {
+    // The explicit-formula mode owns the shared N slider/state while active; explicit.exit()
+    // calls this again to bring the Zeta Wave back in line.
+    if (state.explicitModeActive) return;
     syncZetaNControl();
     N = Math.min(N, state.zetaZeroCount);
     if (!state.zetaModeActive || N === 0) {

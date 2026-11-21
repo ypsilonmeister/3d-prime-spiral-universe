@@ -135,7 +135,7 @@ export function bindUIEvents(enterVRCallback) {
     }
 
     const recomputeZeta = rafThrottle(() => {
-        if (state.explicitModeActive) explicitMode.onNChange();
+        if (state.explicitModeActive) { explicitMode.onNChange(); return; }
         if (state.zetaModeActive) {
             computeZetaOffsets(state.zetaZeroCount);
         }
@@ -162,6 +162,7 @@ export function bindUIEvents(enterVRCallback) {
     const zetaAnimBtn = getElement('zeta-anim-btn');
     if (zetaAnimBtn) {
         zetaAnimBtn.addEventListener('click', () => {
+            if (state.explicitModeActive) return;   // the explicit-formula mode owns N
             if (state.zetaAnimating) {
                 state.zetaAnimating = false;
                 zetaAnimBtn.textContent = 'Animate';
@@ -184,6 +185,7 @@ export function bindUIEvents(enterVRCallback) {
                     zetaAnimBtn.textContent = 'Animate';
                     return;
                 }
+                if (state.explicitModeActive) { state.zetaAnimating = false; zetaAnimBtn.textContent = 'Animate'; return; }
                 n++;
                 state.zetaZeroCount = n;
                 zetaNSlider.value = n;

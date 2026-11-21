@@ -12,7 +12,8 @@ import {
     buildPsiTables, computeExplicitBase, computeExplicitRecon, rmsDiff,
     compressedOffset, compressionRef, SCHOENFELD_X0,
 } from '../../shared/explicit-formula.js';
-import { isWorkerReady, requestExplicit, cancelExplicitRequests } from '../worker-client.js';
+import { isWorkerReady, requestExplicit, cancelExplicitRequests, onWorkerFailure } from '../worker-client.js';
+import { computeZetaOffsets } from './zeta.js';
 
 export const EXPLICIT_SAMPLES = 1600;
 export const EXPLICIT_SAMPLES_FALLBACK = 400;
@@ -27,6 +28,7 @@ let token = 0;            // bumps on every full rebuild / exit; stale async res
 let cache = null;         // { xMax, M, fallback, xs, meas, bound, head, frames, dMeas, shell }
 let reconSeq = 0;
 let prevPointsVisible = true;
+let savedZetaN = null;    // zetaZeroCount at entry, restored on exit
 let syncTables = null;    // { max, tables } for the fallback path
 
 // Analytic frame on the cone spiral at log-progress u in [0,1]: position P, normal n (radial, outward,
@@ -214,7 +216,12 @@ async function computeRecon(N, myToken) {
     if (c.fallback) {
         recon = computeExplicitRecon(c.xs, N, ZETA_ZEROS);
     } else {
-        const m = await requestExplicit({ type: 'explicit_recon', xMax: c.xMax, M: c.M, N });
+        let m;
+        try {
+            m = await requestExplicit({ type: 'explicit_recon', xMax: c.xMax, M: c.M, N });
+        } catch (e) {
+            return;                           // worker died: the failure handler rebuilds in fallback
+        }
         if (!m) return;                       // superseded
         recon = m.recon;
     }
@@ -249,6 +256,7 @@ async function fullRebuild() {
             if (!m) return;
             base = m;
         } catch (e) {
+            // worker died: the failure handler starts a fallback rebuild (which bumps the token)
             console.error('explicit mode: worker request failed', e);
             return;
         }
@@ -275,11 +283,35 @@ function syncNControl() {
     if (note) note.textContent = '';
 }
 
+// Zeta Wave is off: just put the shared slider/label back to the restored N.
+function syncZetaNRestore() {
+    if (typeof document === 'undefined') return;
+    const slider = document.getElementById('zeta-n-slider');
+    const val = document.getElementById('zeta-n-val');
+    if (slider) slider.value = String(state.zetaZeroCount);
+    if (val) val.innerText = state.zetaZeroCount;
+}
+
+// Worker died after startup: drop the ribbon work and redo it on the main thread (M=400).
+onWorkerFailure(() => {
+    if (state.explicitModeActive) fullRebuild();
+});
+
 export const explicitMode = {
     id: 'explicit',
     kind: 'owner',
     enter() {
         state.explicitModeActive = true;
+        savedZetaN = state.zetaZeroCount;
+        // Pause the Zeta Wave's own N-driven work (animation); its recompute is gated in computeZetaOffsets.
+        if (state.zetaAnimating) {
+            state.zetaAnimating = false;
+            clearTimeout(state.zetaAnimFrame);
+            if (typeof document !== 'undefined') {
+                const b = document.getElementById('zeta-anim-btn');
+                if (b) b.textContent = 'Animate';
+            }
+        }
         if (!(state.zetaZeroCount > 0)) state.zetaZeroCount = DEFAULT_N;
         state.zetaZeroCount = Math.min(state.zetaZeroCount, ZETA_ZEROS.length);
         syncNControl();
@@ -296,6 +328,10 @@ export const explicitMode = {
         state.explicitInfo = null;
         if (state.points) state.points.visible = prevPointsVisible;
         setStatus('');
+        // Hand N back to the Zeta Wave exactly as it was, and resync it if it is still on.
+        if (savedZetaN != null) { state.zetaZeroCount = savedZetaN; savedZetaN = null; }
+        if (state.zetaModeActive) computeZetaOffsets(state.zetaZeroCount);
+        else syncZetaNRestore();
     },
     // N slider: only the reconstruction ribbon is recomputed (measured + shell stay cached).
     onNChange() {

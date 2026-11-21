@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { buildSieve } from '../shared/sieve.js';
 import {
-    buildPsiTables, measuredPsi, measuredPsi1, explicitPsi, explicitPsi1,
+    buildPsiTables, measuredPsi, measuredPsi1, explicitPsi, explicitPsi1, buildZetaDenom,
     LN2PI, ZP_M1, schoenfeldBound, schoenfeldBound1, SCHOENFELD_X0, logSpacedSamples,
 } from '../shared/explicit-formula.js';
 
@@ -37,7 +37,8 @@ const { PSI, PSI1 } = T;
 const psiMeas = x => measuredPsi(T, x);
 const psi1Meas = x => measuredPsi1(T, x);
 // explicit formulas with the first N zeros (rho = 1/2 + i gamma)
-const psiExp = (x, N) => explicitPsi(x, N, zeros);
+const zetaDenom = buildZetaDenom(zeros); // fixed data: build once, pass explicitly
+const psiExp = (x, N) => explicitPsi(x, N, zeros, zetaDenom);
 const psi1Exp = (x, N) => explicitPsi1(x, N, zeros);
 
 // composite Simpson in u = ln t on [a,b] of f(t) t dt

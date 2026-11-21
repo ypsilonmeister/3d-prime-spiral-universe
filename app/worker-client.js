@@ -6,6 +6,8 @@ let _worker = null;
 let _workerReady = false;
 let _zetaReqId = 0;
 let _zetaResolveLast = null; // resolver for the latest in-flight zeta request
+let _explicitReqId = 0;
+const _explicitPending = new Map(); // reqId -> resolve
 
 export function isWorkerReady() {
     return _workerReady;
@@ -37,6 +39,9 @@ export function initWorker(onProgress) {
                 state.ntl_phi      = m.ntl_phi;
                 _workerReady = true;
                 resolve();
+            } else if (m.type === 'explicit_done') {
+                const res = _explicitPending.get(m.reqId);
+                if (res) { _explicitPending.delete(m.reqId); res(m); }
             } else if (m.type === 'zeta_done') {
                 // Apply only if it's the latest request (drop stale results)
                 if (m.reqId === _zetaReqId) {
@@ -78,4 +83,19 @@ export function requestZetaOffsets(N, amplitude, spacing) {
             spacing
         });
     });
+}
+
+// Explicit-formula mode: post `msg` (type explicit_base | explicit_recon) and resolve with the worker reply.
+// Resolves null when a newer request of any explicit kind superseded it (cancelExplicitRequests).
+export function requestExplicit(msg) {
+    const id = ++_explicitReqId;
+    return new Promise(resolve => {
+        _explicitPending.set(id, resolve);
+        _worker.postMessage({ ...msg, reqId: id });
+    });
+}
+
+export function cancelExplicitRequests() {
+    for (const res of _explicitPending.values()) res(null);
+    _explicitPending.clear();
 }

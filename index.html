@@ -76,11 +76,30 @@
         <div id="zeta-controls" style="display:none;">
             <div class="section-label">Zeros N: <span id="zeta-n-val">0</span><span id="zeta-n-note" style="opacity:.7;font-size:11px;"></span></div>
             <input type="range" id="zeta-n-slider" min="0" max="1000" value="0" step="1" style="width:100%;cursor:pointer;margin-bottom:8px;">
+            <div id="zeta-wave-only">
             <div class="section-label">Amplitude: <span id="zeta-amp-val">1.0</span></div>
             <input type="range" id="zeta-amp-slider" min="0.1" max="5.0" value="1.0" step="0.1" style="width:100%;cursor:pointer;margin-bottom:8px;">
             <div class="controls">
                 <button id="zeta-anim-btn">Animate</button>
             </div>
+            </div>
+        </div>
+
+        <div id="group-explicit-toggle">
+        <div class="section-label">Explicit Formula Mode<span class="help-tip" data-tip="ψ₁(x) − x²/2 on a log-spaced conical spiral: measured curve vs. reconstruction from the first N zeta zeros (N slider above). The shell is the error bound that would hold if the Riemann Hypothesis were true; it is not a proven bound.">?</span></div>
+        <div class="section-sub">ψ₁ measured vs. N-zero reconstruction</div>
+        <div class="toggle-row">
+            <span>Enable</span>
+            <div class="toggle-switch" id="sw-explicit"></div>
+        </div>
+        </div>
+        <div id="explicit-controls" style="display:none;font-size:11px;line-height:1.6;">
+            <div id="explicit-status" style="opacity:.8;margin-bottom:4px;"></div>
+            <div><span style="color:#777777">━</span> 基準軸</div>
+            <div><span style="color:#00f2ff">━</span> 実測 ψ₁(x) − x²/2</div>
+            <div><span style="color:#ffaa33">━</span> N 個の零点による再構成（色＝残差の大きさ）</div>
+            <div><span style="color:#8866ff">◯</span> 誤差上限（RH を仮定した場合）±B₁(x)、x ≥ 73.2</div>
+            <div style="opacity:.7;margin-top:4px;">表示は圧縮スケール：v/x^{3/2} で正規化後 asinh 圧縮。長さは誤差に比例せず、|v| ≤ B(x) の大小関係のみ保存されます。</div>
         </div>
 
         <div id="group-padic-toggle">

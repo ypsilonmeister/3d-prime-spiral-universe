@@ -172,3 +172,47 @@ export function schoenfeldBound1(x, head = 0) {
     if (!(x >= SCHOENFELD_X0)) return NaN;
     return head + INV_8PI * (bound1Antiderivative(x) - bound1Antiderivative(SCHOENFELD_X0));
 }
+
+// ---- explicit-mode orchestration (psi1 curves; pure, shared by worker and main-thread fallback) ----
+
+// Common ASINH_SCALE for the two-stage display transform.
+export const ASINH_SCALE = 0.02;
+
+// Measured psi1 fluctuation, Schoenfeld psi1 bound (RH assumed; NaN for x < 73.2) and its head term
+// for log-spaced samples in [2, xMax]. `tables` = buildPsiTables(>= floor(xMax), spf).
+export function computeExplicitBase(xMax, M, tables) {
+    const xs = logSpacedSamples(2, xMax, M);
+    const meas = new Float64Array(M), bound = new Float64Array(M);
+    const head = xMax >= SCHOENFELD_X0 ? Math.abs(measuredFluctPsi1(tables, SCHOENFELD_X0)) : NaN;
+    for (let i = 0; i < M; i++) {
+        meas[i] = measuredFluctPsi1(tables, xs[i]);
+        bound[i] = schoenfeldBound1(xs[i], head);
+    }
+    return { xs, meas, bound, head };
+}
+
+// Reconstruction with the first N zeros: psi1_N(x) - x^2/2 at every sample (N is clamped to zeros.length).
+export function computeExplicitRecon(xs, N, zeros) {
+    N = Math.max(0, Math.min(Math.floor(N) || 0, zeros.length));
+    const out = new Float64Array(xs.length);
+    for (let i = 0; i < xs.length; i++) out[i] = explicitPsi1(xs[i], N, zeros) - xs[i] * xs[i] / 2;
+    return out;
+}
+
+// Root mean square of a - b.
+export function rmsDiff(a, b) {
+    let s = 0;
+    for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; s += d * d; }
+    return Math.sqrt(s / a.length);
+}
+
+// Two-stage display transform, identical for measured / reconstruction / shell:
+//   u = v / x^{3/2}; y = asinh(u / 0.02); d = amp * y / yRef.
+// Odd and strictly increasing in v, so |v| <= B(x) implies |d(v)| <= d(B(x)).
+export function compressedOffset(v, x, yRef, amp = 220) {
+    return amp * Math.asinh(v / (x * Math.sqrt(x)) / ASINH_SCALE) / yRef;
+}
+// y_ref = asinh(B(xMax)/xMax^{3/2}/0.02) (falls back to the given reference magnitude when B is undefined).
+export function compressionRef(bAtXMax, xMax) {
+    return Math.asinh(bAtXMax / (xMax * Math.sqrt(xMax)) / ASINH_SCALE);
+}

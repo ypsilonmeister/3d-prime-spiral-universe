@@ -6,6 +6,7 @@ import { applyPositionOverlays } from '../render/lattice.js';
 import { updateParticleVisuals, clearAboveActive } from '../render/particles.js';
 import { toggleMode, onCountChange, isOverlayActive, rebuildPositions } from '../modes/mode-manager.js';
 import { computeZetaOffsets } from '../modes/zeta.js';
+import { explicitMode } from '../modes/explicit.js';
 import { computePadicValuations, applyPadicPositions, updatePadicColorVisuals } from '../modes/padic.js';
 import { computePrimeDimValuations, applyPrimeDimPositions, buildPrimeDimAxisObjects, removePrimeDimAxisObjects, updatePrimeDimVisuals } from '../modes/prime-dim.js';
 import { computeNTLOffsets, updateNTLVisuals } from '../modes/ntl.js';
@@ -125,7 +126,16 @@ export function bindUIEvents(enterVRCallback) {
         });
     }
 
+    const groupExplicitToggle = getElement('group-explicit-toggle');
+    if (groupExplicitToggle) {
+        groupExplicitToggle.querySelector('.toggle-row').addEventListener('click', () => {
+            toggleMode('explicit');
+            updateUI();
+        });
+    }
+
     const recomputeZeta = rafThrottle(() => {
+        if (state.explicitModeActive) explicitMode.onNChange();
         if (state.zetaModeActive) {
             computeZetaOffsets(state.zetaZeroCount);
         }

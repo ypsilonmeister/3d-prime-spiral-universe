@@ -9,6 +9,7 @@ import { padicMode } from './padic.js';
 import { primeDimMode } from './prime-dim.js';
 import { ntlMode, computeNTLOffsets } from './ntl.js';
 import { sieveMode } from './sieve-anim.js';
+import { explicitMode } from './explicit.js';
 
 const modes = new Map();
 let activeOwner = null;
@@ -25,6 +26,7 @@ export function initModeManager() {
     modes.set(primeDimMode.id, primeDimMode);
     modes.set(ntlMode.id, ntlMode);
     modes.set(sieveMode.id, sieveMode);
+    modes.set(explicitMode.id, explicitMode);
 }
 
 // Recompute the lattice base positions and COMMIT them into the live target

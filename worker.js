@@ -6,7 +6,7 @@
 
 // Riemann zeta zeros and number-theory primitives are shared with the main
 // thread and sub-apps via shared/ — single source of truth, no drift.
-import { ZETA_ZEROS } from './shared/zeta-zeros.js';
+import { ZETA_ZEROS_1000 as ZETA_ZEROS } from './shared/zeta-zeros-1000.js';
 import { buildSieve } from './shared/sieve.js';
 import { computeNtlTables } from './shared/arithmetic.js';
 
@@ -38,8 +38,9 @@ function buildSieves(maxPoints) {
         _lnCache[i] = Math.log(x);
         _sqrtCache[i] = Math.sqrt(x);
     }
-    _zetaDenom = new Float64Array(100);
-    for (let k = 0; k < 100; k++) {
+    const ZN = ZETA_ZEROS.length; // 1000
+    _zetaDenom = new Float64Array(ZN);
+    for (let k = 0; k < ZN; k++) {
         const g = ZETA_ZEROS[k];
         _zetaDenom[k] = 0.25 + g * g;
     }
@@ -49,9 +50,14 @@ function buildSieves(maxPoints) {
     };
 }
 
+// Returns { raw, normalized }.
+//   raw        = -sum_{k<=N} 2Re(x^rho_k/rho_k) at x = i+1 (unnormalized, Float32Array)
+//   normalized = raw scaled so max|.| = spacing*8*amplitude (the legacy visual offsets)
 function computeZetaOffsets(N, amplitude, spacing) {
-    const offsets = new Float32Array(MAX);
-    if (N === 0) return offsets;
+    const raw = new Float32Array(MAX);
+    const normalized = new Float32Array(MAX);
+    N = Math.max(0, Math.min(Math.floor(N) || 0, _zetaDenom ? _zetaDenom.length : 0));
+    if (N === 0) return { raw, normalized };
 
     for (let i = 0; i < MAX; i++) {
         const lnx   = _lnCache[i];
@@ -62,19 +68,18 @@ function computeZetaOffsets(N, amplitude, spacing) {
             const angle = g * lnx;
             sum += sqrtx * (Math.cos(angle) * 0.5 + Math.sin(angle) * g) / _zetaDenom[k];
         }
-        offsets[i] = -2.0 * sum;
+        raw[i] = -2.0 * sum;
     }
 
+    // Legacy normalization: scale from the Float32-rounded raw values, as before.
     let maxAbs = 0;
     for (let i = 0; i < MAX; i++) {
-        const a = Math.abs(offsets[i]);
+        const a = Math.abs(raw[i]);
         if (a > maxAbs) maxAbs = a;
     }
-    if (maxAbs > 0) {
-        const scale = (spacing * 8.0 * amplitude) / maxAbs;
-        for (let i = 0; i < MAX; i++) offsets[i] *= scale;
-    }
-    return offsets;
+    const scale = maxAbs > 0 ? (spacing * 8.0 * amplitude) / maxAbs : 1;
+    for (let i = 0; i < MAX; i++) normalized[i] = raw[i] * scale;
+    return { raw, normalized };
 }
 
 self.onmessage = (e) => {
@@ -97,7 +102,11 @@ self.onmessage = (e) => {
             tables.ntl_phi.buffer,
         ]);
     } else if (msg.type === 'zeta') {
-        const offsets = computeZetaOffsets(msg.N, msg.amplitude, msg.spacing);
-        self.postMessage({ type: 'zeta_done', reqId: msg.reqId, offsets }, [offsets.buffer]);
+        const { raw, normalized } = computeZetaOffsets(msg.N, msg.amplitude, msg.spacing);
+        // offsets = normalized (backward compatible); rawOffsets = unnormalized sum
+        self.postMessage(
+            { type: 'zeta_done', reqId: msg.reqId, offsets: normalized, rawOffsets: raw },
+            [normalized.buffer, raw.buffer]
+        );
     }
 };

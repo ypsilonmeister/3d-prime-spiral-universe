@@ -77,6 +77,7 @@ export const state = {
     zetaAnimating: false,
     zetaAnimFrame: null,
     zetaOffsets: new Float32Array(320000),
+    zetaOffsetsRaw: new Float32Array(320000), // unnormalized -sum 2Re(x^rho/rho), from worker
 
     // Math buffers loaded from worker
     isPrimeArray: new Uint8Array(320000 + 1),

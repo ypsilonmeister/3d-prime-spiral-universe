@@ -10,8 +10,13 @@ let _lnCacheSync = null;
 let _sqrtCacheSync = null;
 let _zetaDenomSync = null;
 
+// The fallback runs on the main thread (worker unavailable), so cap the effective N
+// to keep the UI responsive: N=1000 over MAX_POINTS blocked ~10s, N=100 about a tenth of that.
+const ZETA_SYNC_FALLBACK_MAX_N = 100;
+
 function _computeZetaSyncFallback(N) {
-    N = Math.min(N, ZETA_ZEROS.length); // never read past the zero table (would yield NaN)
+    // also never read past the zero table (would yield NaN)
+    N = Math.min(N, ZETA_SYNC_FALLBACK_MAX_N, ZETA_ZEROS.length);
     if (!_zetaSyncCachesBuilt) {
         _lnCacheSync = new Float64Array(state.MAX_POINTS);
         _sqrtCacheSync = new Float64Array(state.MAX_POINTS);

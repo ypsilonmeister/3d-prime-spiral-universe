@@ -1,0 +1,60 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: ["master"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # ubuntu-latest は 26.04 を指し Playwright 1.59.1 が未対応のため固定
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # pnpm のバージョンは package.json の packageManager (pnpm@10.28.2) に従う
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # postinstall (scripts/vendor-three.mjs) が node_modules/three を vendor/ にコピーする
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify vendored three
+        run: test -s vendor/three/build/three.module.js && test -s vendor/three/examples/jsm/controls/OrbitControls.js
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Verify explicit formula
+        run: node scripts/verify-explicit-formula.mjs
+
+      - name: Run Playwright tests
+        run: pnpm test
+
+      - name: Upload Playwright artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14

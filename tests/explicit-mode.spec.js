@@ -364,4 +364,318 @@ test.describe('explicit formula mode', () => {
     await expect(page.locator('#zeta-anim-btn')).toHaveText('Animate');
     expect(await page.evaluate(() => window.__APP_STATE__.zetaZeroCount)).toBe(100);
   });
+
+  // ---- PR-C: kind switch, residual view (View B), numeric HUD, GPU leak check ----
+
+  const waitExplicitReady = (page, predicate = () => true) =>
+    expect.poll(async () => page.evaluate((predSrc) => {
+      const i = window.__APP_STATE__.explicitInfo;
+      if (!i || i.N == null || i.pending) return false;
+      return new Function('i', `return (${predSrc})(i);`)(i);
+    }, predicate.toString()), { timeout: 30_000 }).toBe(true);
+
+  test('kind switch (psi1 <-> psi): shows Gibbs note for psi, applies design scaling, keeps RH-assumed wording', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1');
+
+    // Default is psi1: Gibbs note hidden, s=0.02 documented
+    await expect(page.locator('#explicit-kind-psi1')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#explicit-kind-psi')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#explicit-gibbs-note')).toBeHidden();
+    await expect(page.locator('#explicit-scale-note')).toContainText('0.02');
+    await expect(page.locator('#explicit-controls')).toContainText('誤差上限（RH を仮定した場合）');
+    await expect(page.locator('#explicit-controls')).not.toContainText('証明済み');
+
+    const yRefPsi1 = await page.evaluate(async () => {
+      const ef = await import('/shared/explicit-formula.js');
+      const s = window.__APP_STATE__;
+      const expected = ef.compressionRef(s.explicitInfo.hud.samples[1].bound, s.explicitInfo.xMax, 'psi1');
+      return { got: s.explicitInfo.yRef, expected };
+    });
+    expect(Math.abs(yRefPsi1.got - yRefPsi1.expected)).toBeLessThan(1e-12);
+
+    // Switch to psi: Gibbs note visible, s=0.25 scaling applied, shell still starts at 73.2
+    await page.locator('#explicit-kind-psi').click();
+    await waitExplicitReady(page, i => i.kind === 'psi');
+    await expect(page.locator('#explicit-kind-psi')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#explicit-kind-psi1')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#explicit-gibbs-note')).toBeVisible();
+    await expect(page.locator('#explicit-gibbs-note')).toContainText('Gibbs');
+    await expect(page.locator('#explicit-gibbs-note')).toContainText('単調ではありません');
+    await expect(page.locator('#explicit-scale-note')).toContainText('0.25');
+    await expect(page.locator('#explicit-controls')).toContainText('誤差上限（RH を仮定した場合）');
+
+    const psiCheck = await page.evaluate(async () => {
+      const ef = await import('/shared/explicit-formula.js');
+      const s = window.__APP_STATE__;
+      const expectedYRef = ef.compressionRef(s.explicitInfo.hud.samples[1].bound, s.explicitInfo.xMax, 'psi');
+      const gl = s.renderer.getContext();
+      return {
+        gotYRef: s.explicitInfo.yRef,
+        expectedYRef,
+        minShellX: Math.min(...s.explicitInfo.shellX),
+        glError: gl.getError(),
+      };
+    });
+    expect(Math.abs(psiCheck.gotYRef - psiCheck.expectedYRef)).toBeLessThan(1e-12);
+    expect(psiCheck.minShellX).toBe(73.2);
+    expect(psiCheck.glError).toBe(0);
+
+    // Switch back to psi1: Gibbs note hidden again
+    await page.locator('#explicit-kind-psi1').click();
+    await waitExplicitReady(page, i => i.kind === 'psi1');
+    await expect(page.locator('#explicit-gibbs-note')).toBeHidden();
+    expect(errors).toEqual([]);
+  });
+
+  test('residual view (View B): auto-hides shell, restores on View A, and caches measured/shell across N changes', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.view === 'a');
+
+    const snapshot = () => page.evaluate(() => {
+      const g = window.__APP_STATE__.scene.getObjectByName('explicit-group');
+      const byName = Object.fromEntries(g.children.map(c => [c.name, { visible: c.visible, uuid: c.geometry.uuid }]));
+      const ribPos = g.getObjectByName('explicit-ribbon').geometry.attributes.position.array;
+      return {
+        byName,
+        shellVisibleInfo: window.__APP_STATE__.explicitInfo.shellVisible,
+        ribbonHead: Array.from(ribPos.slice(0, 12)),
+        ribbonTail: Array.from(ribPos.slice(-12)),
+      };
+    });
+
+    const viewA1 = await snapshot();
+    expect(viewA1.byName['explicit-shell'].visible).toBe(true);
+    expect(viewA1.byName['explicit-boundary-ring'].visible).toBe(true);
+    expect(viewA1.byName['explicit-measured'].visible).toBe(true);
+    expect(viewA1.byName['explicit-ribbon'].visible).toBe(true);
+    expect(viewA1.shellVisibleInfo).toBe(true);
+
+    // Switch to View B (residual only): shell, boundary ring, and measured curve hide automatically
+    await page.locator('#explicit-view-b').click();
+    await expect(page.locator('#explicit-view-b')).toHaveAttribute('aria-pressed', 'true');
+    const viewB1 = await snapshot();
+    expect(viewB1.byName['explicit-shell'].visible).toBe(false);
+    expect(viewB1.byName['explicit-boundary-ring'].visible).toBe(false);
+    expect(viewB1.byName['explicit-measured'].visible).toBe(false);
+    expect(viewB1.byName['explicit-axis'].visible).toBe(true);
+    expect(viewB1.byName['explicit-ribbon'].visible).toBe(true);
+    expect(viewB1.shellVisibleInfo).toBe(false);
+    // Ribbon geometry updated in-place to plot residual (different positions from View A reconstruction)
+    expect(viewB1.ribbonTail).not.toEqual(viewA1.ribbonTail);
+    for (const name of Object.keys(viewA1.byName)) {
+      expect(viewB1.byName[name].uuid).toBe(viewA1.byName[name].uuid);
+    }
+
+    // Changing N in View B recomputes only reconstruction/residual; measured & shell stay cached and hidden
+    await setN(page, 300);
+    const viewB2 = await snapshot();
+    expect(viewB2.byName['explicit-shell'].visible).toBe(false);
+    expect(viewB2.byName['explicit-boundary-ring'].visible).toBe(false);
+    expect(viewB2.byName['explicit-measured'].visible).toBe(false);
+    expect(viewB2.ribbonTail).not.toEqual(viewB1.ribbonTail);
+    for (const name of Object.keys(viewA1.byName)) {
+      expect(viewB2.byName[name].uuid).toBe(viewA1.byName[name].uuid);
+    }
+
+    // Returning to View A restores shell, boundary ring, and measured curve from cache
+    await page.locator('#explicit-view-a').click();
+    await expect(page.locator('#explicit-view-a')).toHaveAttribute('aria-pressed', 'true');
+    const viewA2 = await snapshot();
+    expect(viewA2.byName['explicit-shell'].visible).toBe(true);
+    expect(viewA2.byName['explicit-boundary-ring'].visible).toBe(true);
+    expect(viewA2.byName['explicit-measured'].visible).toBe(true);
+    expect(viewA2.shellVisibleInfo).toBe(true);
+    for (const name of Object.keys(viewA1.byName)) {
+      expect(viewA2.byName[name].uuid).toBe(viewA1.byName[name].uuid);
+    }
+    expect(errors).toEqual([]);
+  });
+
+  test('numeric HUD displays representative x values matching shared pure functions across kind / N / view', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.N === 100);
+
+    const checkHudMatchesShared = async (expectedKind, expectedN, expectedView) => {
+      const res = await page.evaluate(async ({ expectedKind, expectedN, expectedView }) => {
+        const ef = await import('/shared/explicit-formula.js');
+        const { buildSieve } = await import('/shared/sieve.js');
+        const { ZETA_ZEROS_1000 } = await import('/shared/zeta-zeros-1000.js');
+        const s = window.__APP_STATE__;
+        const info = s.explicitInfo;
+        const tables = ef.buildPsiTables(info.xMax, buildSieve(info.xMax).spf);
+        const base = ef.computeExplicitBase(info.xMax, info.M, tables, expectedKind);
+        const recon = ef.computeExplicitRecon(base.xs, expectedN, ZETA_ZEROS_1000, expectedKind);
+        const residual = ef.computeExplicitResidual(base.meas, recon);
+        const expectedHud = ef.computeExplicitHud(base.xs, base.meas, recon, base.bound, residual);
+
+        const hudEl = document.getElementById('explicit-hud');
+        const sampleEls = Array.from(hudEl.querySelectorAll('.explicit-hud-sample'));
+        const domRaws = sampleEls.map(el => ({
+          label: el.getAttribute('data-sample'),
+          raws: Array.from(el.querySelectorAll('.explicit-hud-val')).map(v => Number(v.getAttribute('data-raw'))),
+        }));
+        return {
+          kind: info.kind,
+          N: info.N,
+          view: info.view,
+          text: hudEl.textContent,
+          gotHud: info.hud,
+          expectedHud,
+          domRaws,
+        };
+      }, { expectedKind, expectedN, expectedView });
+
+      expect(res.kind).toBe(expectedKind);
+      expect(res.N).toBe(expectedN);
+      expect(res.view).toBe(expectedView);
+      expect(res.text).toContain(`N=${expectedN}`);
+      expect(res.gotHud.samples).toHaveLength(2);
+      expect(Math.abs(res.gotHud.rms - res.expectedHud.rms)).toBeLessThan(1e-9);
+      for (let i = 0; i < 2; i++) {
+        const g = res.gotHud.samples[i], e = res.expectedHud.samples[i];
+        expect(g.label).toBe(e.label);
+        expect(g.x).toBe(e.x);
+        expect(Math.abs(g.measured - e.measured)).toBeLessThan(1e-9);
+        expect(Math.abs(g.recon - e.recon)).toBeLessThan(1e-9);
+        expect(Math.abs(g.residual - e.residual)).toBeLessThan(1e-9);
+        expect(Math.abs(g.bound - e.bound)).toBeLessThan(1e-9);
+        // DOM data-raw values match the exact shared-function values (order reflects View A vs View B)
+        const expectedDomOrder = expectedView === 'b'
+          ? [e.residual, e.measured, e.recon, e.bound]
+          : [e.measured, e.recon, e.residual, e.bound];
+        expect(res.domRaws[i].label).toBe(e.label);
+        for (let j = 0; j < 4; j++) {
+          expect(Math.abs(res.domRaws[i].raws[j] - expectedDomOrder[j])).toBeLessThan(1e-9);
+        }
+      }
+    };
+
+    await checkHudMatchesShared('psi1', 100, 'a');
+    await setN(page, 250);
+    await checkHudMatchesShared('psi1', 250, 'a');
+
+    await page.locator('#explicit-view-b').click();
+    await checkHudMatchesShared('psi1', 250, 'b');
+    await expect(page.locator('#explicit-hud')).toContainText('ビュー B');
+
+    await page.locator('#explicit-kind-psi').click();
+    await waitExplicitReady(page, i => i.kind === 'psi' && i.N === 250);
+    await checkHudMatchesShared('psi', 250, 'b');
+    await expect(page.locator('#explicit-hud')).toContainText('B(x)');
+    expect(errors).toEqual([]);
+  });
+
+  test('GPU resource leak check: repeated enter/exit, kind/view switches, and aborted enter do not leak WebGL resources', async ({ page }) => {
+    test.setTimeout(180_000);
+    const errors = await boot(page);
+
+    const waitFrames = (n = 3) => page.evaluate((count) => new Promise(resolve => {
+      let left = count;
+      const tick = () => (--left <= 0 ? resolve() : requestAnimationFrame(tick));
+      requestAnimationFrame(tick);
+    }), n);
+
+    const measureGpu = () => page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      let sceneObjects = 0;
+      const materials = new Set();
+      s.scene.traverse(o => {
+        sceneObjects++;
+        if (o.material) {
+          for (const m of (Array.isArray(o.material) ? o.material : [o.material])) materials.add(m.uuid);
+        }
+      });
+      const mem = s.renderer.info.memory;
+      return {
+        geometries: mem.geometries,
+        textures: mem.textures,
+        programs: s.renderer.info.programs ? s.renderer.info.programs.length : 0,
+        sceneObjects,
+        materialCount: materials.size,
+        hasExplicitGroup: !!s.scene.getObjectByName('explicit-group'),
+        glError: s.renderer.getContext().getError(),
+      };
+    });
+
+    await waitFrames(4);
+    const baseline = await measureGpu();
+    expect(baseline.hasExplicitGroup).toBe(false);
+    expect(baseline.glError).toBe(0);
+
+    const activeStats = [];
+    const exitStats = [];
+
+    for (let cycle = 0; cycle < 5; cycle++) {
+      await enter(page);
+      await waitExplicitReady(page, i => i.N != null);
+      // Exercise kind switch, view switch, and N change inside the mode
+      if (cycle % 2 === 0) {
+        await page.locator('#explicit-kind-psi').click();
+        await waitExplicitReady(page, i => i.kind === 'psi');
+        await page.locator('#explicit-view-b').click();
+        await waitFrames(2);
+        await page.locator('#explicit-view-a').click();
+        await page.locator('#explicit-kind-psi1').click();
+        await waitExplicitReady(page, i => i.kind === 'psi1');
+      } else {
+        await setN(page, 50 + cycle * 20);
+        await page.locator('#explicit-view-b').click();
+        await waitFrames(2);
+        await page.locator('#explicit-view-a').click();
+      }
+      await waitFrames(3);
+      activeStats.push(await measureGpu());
+
+      await enter(page); // exit
+      await waitFrames(3);
+      exitStats.push(await measureGpu());
+    }
+
+    // Rapid enter + immediate exit (aborting in-flight worker rebuild) must also leave zero leaks.
+    await page.evaluate(() => {
+      const row = document.querySelector('#group-explicit-toggle .toggle-row');
+      row.click();
+      row.click();
+    });
+    await waitFrames(4);
+    const afterRapid = await measureGpu();
+
+    console.log('GPU leak check baseline:', JSON.stringify(baseline));
+    console.log('GPU leak check activeStats:', JSON.stringify(activeStats));
+    console.log('GPU leak check exitStats:', JSON.stringify(exitStats));
+    console.log('GPU leak check afterRapid:', JSON.stringify(afterRapid));
+
+    for (const st of exitStats) {
+      expect(st.geometries).toBe(baseline.geometries);
+      expect(st.textures).toBe(baseline.textures);
+      expect(st.sceneObjects).toBe(baseline.sceneObjects);
+      expect(st.materialCount).toBe(baseline.materialCount);
+      expect(st.hasExplicitGroup).toBe(false);
+      expect(st.glError).toBe(0);
+    }
+    expect(afterRapid.geometries).toBe(baseline.geometries);
+    expect(afterRapid.textures).toBe(baseline.textures);
+    expect(afterRapid.sceneObjects).toBe(baseline.sceneObjects);
+    expect(afterRapid.materialCount).toBe(baseline.materialCount);
+    expect(afterRapid.hasExplicitGroup).toBe(false);
+    expect(afterRapid.glError).toBe(0);
+
+    // Active resource counts must stay bounded/constant across all 5 cycles (no monotonic growth).
+    for (const st of activeStats) {
+      expect(st.geometries).toBe(activeStats[0].geometries);
+      expect(st.textures).toBe(baseline.textures);
+      expect(st.sceneObjects).toBe(activeStats[0].sceneObjects);
+      expect(st.materialCount).toBe(activeStats[0].materialCount);
+      expect(st.glError).toBe(0);
+    }
+    expect(activeStats[activeStats.length - 1].programs).toBeLessThanOrEqual(activeStats[0].programs);
+    expect(errors).toEqual([]);
+  });
 });

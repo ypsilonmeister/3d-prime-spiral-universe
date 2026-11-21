@@ -20,7 +20,8 @@ export function initElements() {
         'sieve-stats', 'composite-select', 'vr-btn', 'count-val', 'count-slider',
         'spacing-val', 'spacing-slider', 'range-info', 'current-state-text',
         'ui-overlay', 'show-ui-hint', 'help-tooltip', 'group-lattice', 'group-spacing',
-        'group-zeta-toggle', 'group-explicit-toggle', 'sw-explicit', 'group-padic-toggle', 'group-primedim-toggle'
+        'group-zeta-toggle', 'group-explicit-toggle', 'sw-explicit', 'explicit-kind-psi1', 'explicit-kind-psi',
+        'explicit-view-a', 'explicit-view-b', 'group-padic-toggle', 'group-primedim-toggle'
     ];
     for (const id of ids) {
         elements[id] = document.getElementById(id);

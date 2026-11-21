@@ -12,7 +12,7 @@ import { computeNtlTables } from './shared/arithmetic.js';
 import {
     buildZetaDenom, buildLnSqrtCaches, accumulateZeroSumPsi,
     maxAbs as maxAbsOf, zetaNormScale, scaleInto,
-    buildPsiTables, computeExplicitBase, computeExplicitRecon,
+    buildPsiTables, computeExplicitBase, computeExplicitRecon, logSpacedSamples,
 } from './shared/explicit-formula.js';
 
 let MAX = 0;
@@ -104,19 +104,22 @@ self.onmessage = (e) => {
             tables.ntl_phi.buffer,
         ]);
     } else if (msg.type === 'explicit_base') {
-        // Measured psi1 - x^2/2 and RH-assumed bound at M log-spaced samples in [2, xMax].
+        // Measured fluctuation (psi1 or psi) and RH-assumed bound at M log-spaced samples in [2, xMax].
         if (!_psiTables) _psiTables = buildPsiTables(MAX, _spf);
         const xMax = Math.min(msg.xMax, MAX);
-        const base = computeExplicitBase(xMax, msg.M, _psiTables);
+        const formulaKind = msg.formulaKind === 'psi' ? 'psi' : 'psi1';
+        const base = computeExplicitBase(xMax, msg.M, _psiTables, formulaKind);
         _explicitXs = { xMax, M: msg.M, xs: base.xs };
         // xs stays cached for explicit_recon, so transfer a copy (a transferred buffer would be detached here).
         const out = { ...base, xs: new Float64Array(base.xs) };
         self.postMessage({ type: 'explicit_done', kind: 'base', reqId: msg.reqId, ...out },
             [out.xs.buffer, out.meas.buffer, out.bound.buffer]);
     } else if (msg.type === 'explicit_recon') {
-        const xs = _explicitXs && _explicitXs.xMax === msg.xMax && _explicitXs.M === msg.M
-            ? _explicitXs.xs : computeExplicitBase(msg.xMax, msg.M, _psiTables || (_psiTables = buildPsiTables(MAX, _spf))).xs;
-        const recon = computeExplicitRecon(xs, msg.N, ZETA_ZEROS);
+        const xMax = Math.min(msg.xMax, MAX);
+        const formulaKind = msg.formulaKind === 'psi' ? 'psi' : 'psi1';
+        const xs = _explicitXs && _explicitXs.xMax === xMax && _explicitXs.M === msg.M
+            ? _explicitXs.xs : logSpacedSamples(2, xMax, msg.M);
+        const recon = computeExplicitRecon(xs, msg.N, ZETA_ZEROS, formulaKind, _zetaDenom);
         self.postMessage({ type: 'explicit_done', kind: 'recon', reqId: msg.reqId, recon }, [recon.buffer]);
     } else if (msg.type === 'zeta') {
         const { raw, normalized, recomputed } = computeZetaOffsets(msg.N, msg.amplitude, msg.spacing);

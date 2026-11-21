@@ -173,29 +173,76 @@ export function schoenfeldBound1(x, head = 0) {
     return head + INV_8PI * (bound1Antiderivative(x) - bound1Antiderivative(SCHOENFELD_X0));
 }
 
-// ---- explicit-mode orchestration (psi1 curves; pure, shared by worker and main-thread fallback) ----
+// ---- explicit-mode orchestration (psi1 / psi curves; pure, shared by worker and main-thread fallback) ----
 
-// Common ASINH_SCALE for the two-stage display transform.
-export const ASINH_SCALE = 0.02;
+// Common ASINH_SCALE defaults for the two-stage display transform.
+export const ASINH_SCALE = 0.02; // backward-compatible alias for psi1
+export const ASINH_SCALE_PSI1 = 0.02;
+export const ASINH_SCALE_PSI = 0.25;
+export const EXPLICIT_KIND_DEFAULT = 'psi1';
 
-// Measured psi1 fluctuation, Schoenfeld psi1 bound (RH assumed; NaN for x < 73.2) and its head term
-// for log-spaced samples in [2, xMax]. `tables` = buildPsiTables(>= floor(xMax), spf).
-export function computeExplicitBase(xMax, M, tables) {
-    const xs = logSpacedSamples(2, xMax, M);
-    const meas = new Float64Array(M), bound = new Float64Array(M);
-    const head = xMax >= SCHOENFELD_X0 ? Math.abs(measuredFluctPsi1(tables, SCHOENFELD_X0)) : NaN;
-    for (let i = 0; i < M; i++) {
-        meas[i] = measuredFluctPsi1(tables, xs[i]);
-        bound[i] = schoenfeldBound1(xs[i], head);
-    }
-    return { xs, meas, bound, head };
+export function explicitScaleParams(kind = EXPLICIT_KIND_DEFAULT) {
+    return kind === 'psi'
+        ? { scale: ASINH_SCALE_PSI, norm: x => Math.sqrt(x) }
+        : { scale: ASINH_SCALE_PSI1, norm: x => x * Math.sqrt(x) };
 }
 
-// Reconstruction with the first N zeros: psi1_N(x) - x^2/2 at every sample (N is clamped to zeros.length).
-export function computeExplicitRecon(xs, N, zeros) {
+// Measured fluctuation (psi1(x) - x^2/2 or psi(x) - x) and Schoenfeld bound (RH assumed; NaN for x < 73.2)
+// over an arbitrary sample array `xs`. `tables` = buildPsiTables(>= floor(max(xs)), spf).
+export function computeExplicitBaseForSamples(xs, tables, kind = EXPLICIT_KIND_DEFAULT) {
+    const samples = xs instanceof Float64Array ? xs : Float64Array.from(xs);
+    const M = samples.length;
+    const meas = new Float64Array(M), bound = new Float64Array(M);
+    let xMax = 0;
+    for (let i = 0; i < M; i++) if (samples[i] > xMax) xMax = samples[i];
+    if (kind === 'psi') {
+        const boundAtX0 = xMax >= SCHOENFELD_X0 ? schoenfeldBound(SCHOENFELD_X0) : NaN;
+        for (let i = 0; i < M; i++) {
+            meas[i] = measuredFluctPsi(tables, samples[i]);
+            bound[i] = schoenfeldBound(samples[i]);
+        }
+        return { xs: samples, meas, bound, head: 0, boundAtX0 };
+    }
+    const head = xMax >= SCHOENFELD_X0 ? Math.abs(measuredFluctPsi1(tables, SCHOENFELD_X0)) : NaN;
+    for (let i = 0; i < M; i++) {
+        meas[i] = measuredFluctPsi1(tables, samples[i]);
+        bound[i] = schoenfeldBound1(samples[i], head);
+    }
+    return { xs: samples, meas, bound, head, boundAtX0: head };
+}
+
+// Measured fluctuation, Schoenfeld bound (RH assumed; NaN for x < 73.2) and boundary value at x = 73.2
+// for M log-spaced samples in [2, xMax]. `tables` = buildPsiTables(>= floor(xMax), spf).
+export function computeExplicitBase(xMax, M, tables, kind = EXPLICIT_KIND_DEFAULT) {
+    return computeExplicitBaseForSamples(logSpacedSamples(2, xMax, M), tables, kind);
+}
+
+// Reconstruction fluctuation with the first N zeros (N is clamped to zeros.length):
+//   psi1: psi1_N(x) - x^2/2
+//   psi:  psi0_N(x) - x = -2 * S_N(x) - ln(2pi) - (1/2)ln(1 - x^-2)
+export function computeExplicitRecon(xs, N, zeros, kind = EXPLICIT_KIND_DEFAULT, denom) {
     N = Math.max(0, Math.min(Math.floor(N) || 0, zeros.length));
-    const out = new Float64Array(xs.length);
-    for (let i = 0; i < xs.length; i++) out[i] = explicitPsi1(xs[i], N, zeros) - xs[i] * xs[i] / 2;
+    const M = xs.length;
+    const out = new Float64Array(M);
+    if (kind === 'psi') {
+        const lnArr = new Float64Array(M), sqrtArr = new Float64Array(M);
+        for (let i = 0; i < M; i++) { lnArr[i] = Math.log(xs[i]); sqrtArr[i] = Math.sqrt(xs[i]); }
+        const d = denom || buildZetaDenom(zeros);
+        const S = accumulateZeroSumPsi(new Float64Array(M), lnArr, sqrtArr, zeros, d, 0, N);
+        for (let i = 0; i < M; i++) {
+            const x = xs[i];
+            out[i] = -2 * S[i] - LN2PI - 0.5 * Math.log(1 - 1 / (x * x));
+        }
+        return out;
+    }
+    for (let i = 0; i < M; i++) out[i] = explicitPsi1(xs[i], N, zeros) - xs[i] * xs[i] / 2;
+    return out;
+}
+
+// Truncation residual: measured - reconstructed (same units as measured / reconstructed fluctuations).
+export function computeExplicitResidual(meas, recon) {
+    const out = new Float64Array(meas.length);
+    for (let i = 0; i < meas.length; i++) out[i] = meas[i] - recon[i];
     return out;
 }
 
@@ -206,13 +253,37 @@ export function rmsDiff(a, b) {
     return Math.sqrt(s / a.length);
 }
 
-// Two-stage display transform, identical for measured / reconstruction / shell:
-//   u = v / x^{3/2}; y = asinh(u / 0.02); d = amp * y / yRef.
-// Odd and strictly increasing in v, so |v| <= B(x) implies |d(v)| <= d(B(x)).
-export function compressedOffset(v, x, yRef, amp = 220) {
-    return amp * Math.asinh(v / (x * Math.sqrt(x)) / ASINH_SCALE) / yRef;
+// Representative sample metrics for the explicit-mode numeric HUD (mid and max samples).
+// Purely reads the arrays produced by the shared functions above — no duplicated math.
+export function computeExplicitHud(xs, meas, recon, bound, residual) {
+    const M = xs.length;
+    if (M === 0) return { rms: NaN, samples: [] };
+    const midIdx = Math.floor((M - 1) / 2);
+    const maxIdx = M - 1;
+    const indices = midIdx === maxIdx ? [maxIdx] : [midIdx, maxIdx];
+    const res = residual || computeExplicitResidual(meas, recon);
+    const samples = indices.map((index, pos) => ({
+        label: indices.length === 1 ? 'max' : (pos === 0 ? 'mid' : 'max'),
+        index,
+        x: xs[index],
+        measured: meas[index],
+        recon: recon[index],
+        residual: res[index],
+        bound: bound[index],
+    }));
+    return { rms: rmsDiff(meas, recon), samples };
 }
-// y_ref = asinh(B(xMax)/xMax^{3/2}/0.02) (falls back to the given reference magnitude when B is undefined).
-export function compressionRef(bAtXMax, xMax) {
-    return Math.asinh(bAtXMax / (xMax * Math.sqrt(xMax)) / ASINH_SCALE);
+
+// Two-stage display transform, identical for measured / reconstruction / shell (and residual in view B):
+//   psi1: u = v / x^{3/2}; y = asinh(u / 0.02); d = amp * y / yRef.
+//   psi:  u = v / x^{1/2}; y = asinh(u / 0.25); d = amp * y / yRef.
+// Odd and strictly increasing in v, so |v| <= B(x) implies |d(v)| <= d(B(x)).
+export function compressedOffset(v, x, yRef, amp = 220, kind = EXPLICIT_KIND_DEFAULT) {
+    const { scale, norm } = explicitScaleParams(kind);
+    return amp * Math.asinh(v / norm(x) / scale) / yRef;
+}
+// y_ref = asinh(B(xMax) / norm(xMax) / scale) (falls back to the given reference magnitude when B is undefined).
+export function compressionRef(bAtXMax, xMax, kind = EXPLICIT_KIND_DEFAULT) {
+    const { scale, norm } = explicitScaleParams(kind);
+    return Math.asinh(bAtXMax / norm(xMax) / scale);
 }

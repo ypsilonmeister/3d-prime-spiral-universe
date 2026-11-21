@@ -451,3 +451,85 @@ button.active {
         font-size: 0.62rem;
     }
 }
+
+/* Explicit Formula Mode controls & numeric HUD */
+.explicit-control-block {
+    margin-bottom: 6px;
+}
+
+.explicit-seg-group {
+    display: flex;
+    gap: 4px;
+}
+
+.explicit-seg-btn {
+    flex: 1 1 0;
+    min-block-size: 24px;
+    padding: 3px 6px;
+    font-size: 0.64rem;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.explicit-seg-btn:focus-visible {
+    outline: 2px solid #00f2ff;
+    outline-offset: 2px;
+}
+
+.explicit-note {
+    margin: 4px 0 6px 0;
+    padding: 4px 6px;
+    border-left: 2px solid #ffaa33;
+    background: rgba(255, 170, 51, 0.12);
+    color: #ffd89b;
+    font-size: 10px;
+    line-height: 1.4;
+    border-radius: 3px;
+}
+
+.explicit-legend {
+    margin-top: 4px;
+}
+
+.explicit-hud {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(0, 242, 255, 0.18);
+    font-size: 10px;
+    line-height: 1.45;
+    font-variant-numeric: tabular-nums;
+}
+
+.explicit-hud-head {
+    color: #00f2ff;
+    font-weight: bold;
+    margin-bottom: 3px;
+}
+
+.explicit-hud-sample {
+    margin-top: 5px;
+    padding-top: 4px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.12);
+}
+
+.explicit-hud-x {
+    color: #b8eaff;
+    font-weight: bold;
+    margin-bottom: 2px;
+}
+
+.explicit-hud-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+}
+
+.explicit-hud-row.primary {
+    color: #ffaa33;
+    font-weight: bold;
+}
+
+.explicit-hud-val {
+    text-align: right;
+    white-space: nowrap;
+}

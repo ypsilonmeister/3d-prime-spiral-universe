@@ -3,10 +3,10 @@
 import { state } from '../state.js';
 import { ZETA_ZEROS_1000 as ZETA_ZEROS } from '../../shared/zeta-zeros-1000.js';
 import { requestZetaOffsets, cancelPendingZetaRequests, isWorkerReady } from '../worker-client.js';
-import { buildZetaDenom, buildLnSqrtCaches, accumulateZeroSumPsi, maxAbs, zetaNormScale } from '../../shared/explicit-formula.js';
+import { buildZetaDenom, buildLnSqrtCaches, accumulateZeroSumPsi, maxAbs, zetaNormScale, scaleInto } from '../../shared/explicit-formula.js';
 import { applyPositionOverlays } from '../render/lattice.js';
 
-let _zetaSyncCaches = null; // { ln, sq, denom, S }
+let _zetaSyncCaches = null; // { ln, sq, denom, N, raw (Float32), maxAbs }
 
 // The fallback runs on the main thread (worker unavailable), so cap the effective N
 // to keep the UI responsive: N=1000 over MAX_POINTS blocked ~10s, N=100 about a tenth of that.
@@ -18,20 +18,20 @@ function _computeZetaSyncFallback(N) {
     const M = state.MAX_POINTS;
     if (!_zetaSyncCaches) {
         const { ln, sq } = buildLnSqrtCaches(M);
-        _zetaSyncCaches = { ln, sq, denom: buildZetaDenom(ZETA_ZEROS), S: new Float64Array(M) };
+        _zetaSyncCaches = { ln, sq, denom: buildZetaDenom(ZETA_ZEROS), N: -1, raw: null, maxAbs: 0 };
     }
     const c = _zetaSyncCaches;
-    c.S.fill(0);
-    accumulateZeroSumPsi(c.S, c.ln, c.sq, ZETA_ZEROS, c.denom, 0, N);
-    for (let i = 0; i < M; i++) {
-        state.zetaOffsets[i] = -2.0 * c.S[i];
-        state.zetaOffsetsRaw[i] = -2.0 * c.S[i];
+    // Same policy as worker.js: the zero sum depends only on the effective N; amplitude/spacing
+    // only redo the normalization. raw is kept Float32 so max|raw| matches the worker's.
+    if (c.N !== N) {
+        const S = new Float64Array(M);
+        accumulateZeroSumPsi(S, c.ln, c.sq, ZETA_ZEROS, c.denom, 0, N);
+        const raw = new Float32Array(M);
+        for (let i = 0; i < M; i++) raw[i] = -2.0 * S[i];
+        c.N = N; c.raw = raw; c.maxAbs = maxAbs(raw);
     }
-    const m = maxAbs(state.zetaOffsets);
-    if (m > 0) {
-        const scale = zetaNormScale(m, state.currentSpacing, state.zetaAmplitude);
-        for (let i = 0; i < M; i++) state.zetaOffsets[i] *= scale;
-    }
+    state.zetaOffsetsRaw.set(c.raw);
+    scaleInto(state.zetaOffsets, c.raw, zetaNormScale(c.maxAbs, state.currentSpacing, state.zetaAmplitude));
 }
 
 // Keep the visible N (slider range, label, state) equal to the N actually computed.

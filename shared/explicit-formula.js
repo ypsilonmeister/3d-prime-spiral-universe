@@ -100,14 +100,13 @@ export function zeroSumPsiRaw(lnArr, sqrtArr, zeros, denom, N) {
 }
 
 // Single-point explicit psi0 reconstruction with the first N zeros (verification script).
+// The zero sum goes through accumulateZeroSumPsi (same code path as the worker / fallback).
+const _denomCache = new WeakMap(); // zeros array -> buildZetaDenom(zeros)
 export function explicitPsi(x, N, zeros) {
-    const L = Math.log(x), sx = Math.sqrt(x);
-    let s = 0;
-    for (let k = 0; k < N; k++) {
-        const g = zeros[k], a = g * L;
-        s += (0.5 * Math.cos(a) + g * Math.sin(a)) / (0.25 + g * g);
-    }
-    return x - 2 * sx * s - LN2PI - 0.5 * Math.log(1 - 1 / (x * x));
+    let denom = _denomCache.get(zeros);
+    if (!denom) { denom = buildZetaDenom(zeros); _denomCache.set(zeros, denom); }
+    const S = accumulateZeroSumPsi(new Float64Array(1), [Math.log(x)], [Math.sqrt(x)], zeros, denom, 0, N);
+    return x - 2 * S[0] - LN2PI - 0.5 * Math.log(1 - 1 / (x * x));
 }
 
 // psi1 explicit formula with the first N zeros:

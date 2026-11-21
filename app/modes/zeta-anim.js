@@ -2,7 +2,7 @@
 // (which pauses it on entry and resumes it on exit).
 
 import { state } from '../state.js';
-import { computeZetaOffsets } from './zeta.js';
+import { computeZetaOffsets, zetaEffectiveMaxN } from './zeta.js';
 
 let target = 0;
 let current = 0;   // the sweep's real tick position (state.zetaZeroCount can be moved by the slider)
@@ -31,14 +31,20 @@ export function stopZetaAnimation() {
 
 // Run the sweep from n (already applied by the caller or applied here when `apply`) up to `tgt`.
 export function runZetaAnimation(n, tgt, { apply = true } = {}) {
+    const cap = zetaEffectiveMaxN();
     target = tgt;
+    if (n > cap) n = cap;
     current = n;
     clearTimeout(state.zetaAnimFrame);
-    state.zetaAnimating = true;
-    setButton('Stop');
     state.zetaZeroCount = n;
     showN(n);
     if (apply) computeZetaOffsets(n);
+    if (n >= target || n >= cap) {
+        stopZetaAnimation();
+        return;
+    }
+    state.zetaAnimating = true;
+    setButton('Stop');
     const step = () => {
         if (!state.zetaAnimating || n >= target || state.explicitModeActive) {
             stopZetaAnimation();
@@ -49,9 +55,10 @@ export function runZetaAnimation(n, tgt, { apply = true } = {}) {
         state.zetaZeroCount = n;
         showN(n);
         computeZetaOffsets(n);
-        // computeZetaOffsets clamps the shown N to the effective (fallback) cap: the sweep ends there too.
-        if (state.zetaZeroCount < n) {
-            current = n = state.zetaZeroCount;
+        // Stop on the tick that reaches target or the effective (fallback) cap.
+        const stepCap = zetaEffectiveMaxN();
+        if (state.zetaZeroCount < n) current = n = state.zetaZeroCount;
+        if (n >= target || n >= stepCap) {
             stopZetaAnimation();
             return;
         }

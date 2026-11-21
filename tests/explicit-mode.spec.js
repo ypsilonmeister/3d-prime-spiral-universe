@@ -321,15 +321,46 @@ test.describe('explicit formula mode', () => {
     expect(await page.evaluate(() => window.__APP_STATE__.zetaZeroCount)).toBe(7);
   });
 
-  test('animation stops when the fallback cap is reached', async ({ page }) => {
+  test('animation stops on the tick the fallback cap is reached', async ({ page }) => {
     test.setTimeout(120_000);
-    await boot(page, { blockWorker: true });
+    await spyWorkers(page);
+    await boot(page);
     await zetaToggle(page);
     await page.evaluate(async () => {
       const m = await import('/app/modes/zeta-anim.js');
       m.runZetaAnimation(99, 120);
+      document.querySelector('#group-explicit-toggle .toggle-row').click();
     });
-    await expect.poll(() => page.evaluate(() => window.__APP_STATE__.zetaAnimating), { timeout: 10_000 }).toBe(false);
+    await expect.poll(async () => { const i = await info(page); return i && i.N != null && !i.pending; }, { timeout: 30_000 }).toBe(true);
+    // Worker dies while paused in explicit mode -> fallback cap (N=100) applies on resume.
+    await page.evaluate(() => {
+      const w = window.__workers[0];
+      w.terminate();
+      w.dispatchEvent(new ErrorEvent('error', { message: 'worker died while paused' }));
+    });
+    await expect.poll(async () => { const i = await info(page); return i && i.fallback === true && i.M === 400 && !i.pending && i.N != null; },
+      { timeout: 30_000 }).toBe(true);
+    // Record state immediately after each animation tick fires upon exiting explicit mode.
+    await page.evaluate(() => {
+      window.__ticks = [];
+      const orig = window.setTimeout.bind(window);
+      window.setTimeout = (fn, ms, ...a) => orig((...b) => {
+        const wasAnim = window.__APP_STATE__.zetaAnimating;
+        fn(...b);
+        if (wasAnim) {
+          window.__ticks.push({
+            n: window.__APP_STATE__.zetaZeroCount,
+            anim: window.__APP_STATE__.zetaAnimating,
+            button: document.getElementById('zeta-anim-btn').textContent,
+          });
+        }
+      }, ms, ...a);
+    });
+    await enter(page); // exit explicit mode -> resumes 99 -> 120 under fallback cap 100
+    await expect.poll(() => page.evaluate(() => window.__ticks.length), { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+    await page.waitForTimeout(300); // ensure no extra tick fires after reaching the cap
+    const ticks = await page.evaluate(() => window.__ticks);
+    expect(ticks).toEqual([{ n: 100, anim: false, button: 'Animate' }]);
     await expect(page.locator('#zeta-anim-btn')).toHaveText('Animate');
     expect(await page.evaluate(() => window.__APP_STATE__.zetaZeroCount)).toBe(100);
   });

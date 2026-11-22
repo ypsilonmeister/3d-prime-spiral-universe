@@ -62,6 +62,18 @@ export function toggleMode(id) {
             rebuildPositions();
             updateParticleVisuals();
         } else {
+            // Stop overlays incompatible with the incoming owner before exiting
+            // the previous owner (so e.g. explicit.exit() won't resume a Zeta
+            // overlay that the incoming owner is turning off).
+            if (mode.incompatibleOverlays) {
+                for (const overlayId of mode.incompatibleOverlays) {
+                    const overlay = modes.get(overlayId);
+                    if (overlay && activeOverlays.has(overlay)) {
+                        activeOverlays.delete(overlay);
+                        overlay.exit();
+                    }
+                }
+            }
             // Exit previous owner if any
             if (activeOwner) {
                 activeOwner.exit();
@@ -75,6 +87,9 @@ export function toggleMode(id) {
             activeOverlays.delete(mode);
             mode.exit();
         } else {
+            if (activeOwner && activeOwner.incompatibleOverlays && activeOwner.incompatibleOverlays.includes(mode.id)) {
+                return;
+            }
             activeOverlays.add(mode);
             mode.enter();
         }

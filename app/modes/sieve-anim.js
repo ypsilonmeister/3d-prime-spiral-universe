@@ -2,6 +2,7 @@
 
 import * as THREE from 'three';
 import { state } from '../state.js';
+import { calculateTargetPositions, applyPositionOverlays } from '../render/lattice.js';
 import { updateParticleVisuals } from '../render/particles.js';
 
 const _sieveTmpColor = new THREE.Color();
@@ -189,9 +190,12 @@ export function sieveFadeStep() {
 export const sieveMode = {
     id: 'sieve',
     kind: 'owner',
+    incompatibleOverlays: ['zeta', 'ntl'],
     enter() {
         state.sieveModeActive = true;
         state.sieveLimit = state.activePointCount;
+        calculateTargetPositions();
+        applyPositionOverlays();
         sieveReset();
         if (onSieveUIUpdate) onSieveUIUpdate();
     },

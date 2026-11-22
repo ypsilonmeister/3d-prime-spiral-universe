@@ -26,6 +26,9 @@ const TUBE_SEGMENTS = 16, RIBBON_HALF_WIDTH = 28;
 const RESIDUAL_FULL = 0.25 * AMP; // residual (display units) mapped to the "hot" colour
 const DEFAULT_N = 100;
 const COL_BASE = new THREE.Color(0xffaa33), COL_HOT = new THREE.Color(0xff2d55);
+const PRIME_MARKER_COLOR = 0xf4f7ff; // crisp off-white, distinct from cyan / warm / magenta / violet
+const PRIME_MARKER_SIZE = 16;
+const PRIME_MARKER_OPACITY = 0.85;
 
 let group = null;
 let token = 0;            // bumps on every full rebuild / exit; stale async results are dropped
@@ -36,6 +39,13 @@ let savedAnim = null;     // { n, target } of a Zeta animation running at entry,
 let savedZetaN = null;    // zetaZeroCount at entry, restored on exit
 let syncTables = null;    // { max, tables } for the fallback path
 let syncDenom = null;     // cached buildZetaDenom(ZETA_ZEROS) for the fallback psi path
+
+// Analytic point on the reference cone spiral C(u) for x in [2, xMax] using the same log mapping as samples.
+export function explicitAxisPoint(x, xMax) {
+    const u = Math.log(x / 2) / Math.log(xMax / 2);
+    const th = 2 * Math.PI * TURNS * u, r = R0 + (R1 - R0) * u, h = -H + 2 * H * u;
+    return { x: r * Math.cos(th), y: h, z: r * Math.sin(th), u, r, h };
+}
 
 // Analytic frame on the cone spiral at log-progress u in [0,1]: position P, normal n (radial, outward,
 // orthogonalised against the tangent) and binormal b = T x n.
@@ -106,6 +116,12 @@ function isShellVisible() {
     return !!(shell && shell.visible);
 }
 
+function isPrimesVisible() {
+    if (!group) return false;
+    const primes = group.getObjectByName('explicit-primes');
+    return !!(primes && primes.visible);
+}
+
 function applyViewVisibility() {
     if (!group) return;
     const showA = currentView() === 'a';
@@ -115,6 +131,12 @@ function applyViewVisibility() {
     if (shellObj) shellObj.visible = showA;
     const ringObj = group.getObjectByName('explicit-boundary-ring');
     if (ringObj) ringObj.visible = showA;
+}
+
+function applyPrimesVisibility() {
+    if (!group) return;
+    const primes = group.getObjectByName('explicit-primes');
+    if (primes) primes.visible = !!state.explicitShowPrimes;
 }
 
 // ---- HUD & panel DOM sync ------------------------------------------------
@@ -153,6 +175,17 @@ function renderExplicitPanel() {
     setSegButton('explicit-kind-psi', isPsi);
     setSegButton('explicit-view-a', !isViewB);
     setSegButton('explicit-view-b', isViewB);
+
+    const showPrimes = !!state.explicitShowPrimes;
+    const swPrimes = document.getElementById('sw-explicit-primes');
+    if (swPrimes) {
+        swPrimes.classList.toggle('on', showPrimes);
+        swPrimes.setAttribute('aria-checked', showPrimes ? 'true' : 'false');
+    }
+    const legPrimes = document.getElementById('explicit-legend-primes');
+    if (legPrimes) {
+        legPrimes.style.opacity = showPrimes ? '1' : '0.4';
+    }
 
     const gibbs = document.getElementById('explicit-gibbs-note');
     if (gibbs) gibbs.hidden = !isPsi;
@@ -230,6 +263,39 @@ function renderExplicitPanel() {
 
 // ---- geometry ------------------------------------------------------------
 
+// Prime markers on the reference axis C(u) for all primes p in [2, xMax],
+// read directly from the app's existing prime table (state.isPrimeArray — no sieve duplication).
+function buildPrimeMarkers(xMax, uOf) {
+    const isPrime = state.isPrimeArray;
+    const limit = isPrime ? Math.min(xMax, isPrime.length - 1) : 0;
+    let count = 0;
+    for (let p = 2; p <= limit; p++) if (isPrime[p]) count++;
+    const pos = new Float32Array(count * 3);
+    let k = 0;
+    for (let p = 2; p <= limit; p++) {
+        if (!isPrime[p]) continue;
+        const u = uOf(p);
+        const th = 2 * Math.PI * TURNS * u, r = R0 + (R1 - R0) * u, h = -H + 2 * H * u;
+        pos[k++] = r * Math.cos(th);
+        pos[k++] = h;
+        pos[k++] = r * Math.sin(th);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const m = new THREE.PointsMaterial({
+        color: PRIME_MARKER_COLOR,
+        size: PRIME_MARKER_SIZE,
+        sizeAttenuation: true,
+        transparent: true,
+        opacity: PRIME_MARKER_OPACITY,
+        depthWrite: false,
+    });
+    const pts = new THREE.Points(g, m);
+    pts.name = 'explicit-primes';
+    pts.visible = !!state.explicitShowPrimes;
+    return { points: pts, count };
+}
+
 function buildStaticGeometry(base, xMax, M, kind) {
     const { xs, meas, bound, boundAtX0 } = base;
     const { norm } = explicitScaleParams(kind);
@@ -264,7 +330,8 @@ function buildStaticGeometry(base, xMax, M, kind) {
     };
     const axisLine = line(axis, 0x777777, 0.8); axisLine.name = 'explicit-axis';
     const measLine = line(mpos, 0x00f2ff); measLine.name = 'explicit-measured';
-    group.add(axisLine, measLine);
+    const primeMarkers = buildPrimeMarkers(xMax, uOf);
+    group.add(axisLine, measLine, primeMarkers.points);
 
     // Shell: rings at x = 73.2 (boundary) and every sample with x > 73.2.
     let shell = null;
@@ -311,7 +378,8 @@ function buildStaticGeometry(base, xMax, M, kind) {
         shell = { shellX: Float64Array.from(shellX), rings: R, segments: S };
     }
     applyViewVisibility();
-    return { frames, dMeas, yRef, shell };
+    applyPrimesVisibility();
+    return { frames, dMeas, yRef, shell, primeCount: primeMarkers.count };
 }
 
 // Ribbon along the base curve:
@@ -416,7 +484,10 @@ async function fullRebuild() {
     const view = currentView();
     const fallback = !isWorkerReady();
     const M = fallback ? EXPLICIT_SAMPLES_FALLBACK : EXPLICIT_SAMPLES;
-    publish({ M, xMax, kind, view, fallback, pending: true, rms: null, N: null, hud: null, shell: null, shellVisible: false });
+    publish({
+        M, xMax, kind, view, fallback, pending: true, rms: null, N: null, hud: null,
+        shell: null, shellVisible: false, primeCount: 0, primesVisible: false,
+    });
     setStatus(fallback ? '(fallback mode: reduced samples)' : 'computing…');
     renderExplicitPanel();
 
@@ -445,6 +516,7 @@ async function fullRebuild() {
     publish({
         shell: geo.shell, shellX: geo.shell ? geo.shell.shellX : new Float64Array(0), yRef: geo.yRef,
         samples: base.xs.length, shellVisible: isShellVisible(),
+        primeCount: geo.primeCount, primesVisible: isPrimesVisible(),
     });
     setStatus(fallback ? '(fallback mode: reduced samples)' : `M=${M}, x ∈ [2, ${xMax.toLocaleString()}]`);
     await computeRecon(currentN(), myToken);
@@ -544,6 +616,16 @@ export const explicitMode = {
             } else {
                 publish({ view: next, shellVisible: isShellVisible() });
             }
+        }
+        renderExplicitPanel();
+    },
+    setShowPrimes(show) {
+        const next = !!show;
+        if (state.explicitShowPrimes === next) return;
+        state.explicitShowPrimes = next;
+        if (state.explicitModeActive) {
+            applyPrimesVisibility();
+            publish({ primesVisible: isPrimesVisible() });
         }
         renderExplicitPanel();
     },

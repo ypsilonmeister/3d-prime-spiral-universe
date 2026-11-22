@@ -45,7 +45,7 @@ test.describe('explicit formula mode', () => {
       return { pointsVisible: s.points.visible, names, glError: gl.getError(), M: s.explicitInfo.M };
     });
     expect(r.pointsVisible).toBe(false);
-    expect(r.names).toEqual(['explicit-axis', 'explicit-boundary-ring', 'explicit-measured', 'explicit-ribbon', 'explicit-shell']);
+    expect(r.names).toEqual(['explicit-axis', 'explicit-boundary-ring', 'explicit-measured', 'explicit-primes', 'explicit-ribbon', 'explicit-shell']);
     expect(r.glError).toBe(0);
     expect(r.M).toBe(1600);
     await expect(page.locator('#explicit-controls')).toContainText('誤差上限（RH を仮定した場合）');
@@ -206,7 +206,7 @@ test.describe('explicit formula mode', () => {
       { timeout: 30_000 }).toBe(true);
     await expect(page.locator('#explicit-status')).toHaveText('(fallback mode: reduced samples)');
     const n = await page.evaluate(() => window.__APP_STATE__.scene.getObjectByName('explicit-group').children.length);
-    expect(n).toBe(5);
+    expect(n).toBe(6);
     await setN(page, 50); // still interactive afterwards
   });
   // ---- review #291 regressions -------------------------------------------
@@ -626,8 +626,10 @@ test.describe('explicit formula mode', () => {
         await waitExplicitReady(page, i => i.kind === 'psi1');
       } else {
         await setN(page, 50 + cycle * 20);
+        await page.locator('#explicit-primes-toggle').click();
         await page.locator('#explicit-view-b').click();
         await waitFrames(2);
+        await page.locator('#explicit-primes-toggle').click();
         await page.locator('#explicit-view-a').click();
       }
       await waitFrames(3);
@@ -677,5 +679,178 @@ test.describe('explicit formula mode', () => {
     }
     expect(activeStats[activeStats.length - 1].programs).toBeLessThanOrEqual(activeStats[0].programs);
     expect(errors).toEqual([]);
+  });
+
+  // ---- PR-C follow-up: prime markers on reference axis C(u) ---------------
+
+  test('prime markers: count matches app prime table (pi(320000)), positions sit on axis C(u), toggle works, and exit disposes resources', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+
+    const baselineGeoms = await page.evaluate(() => window.__APP_STATE__.renderer.info.memory.geometries);
+    await enter(page);
+    await waitExplicitReady(page, i => i.N != null);
+
+    // Legend includes prime entry and toggle defaults to visible (on)
+    await expect(page.locator('#explicit-legend')).toContainText('素数');
+    await expect(page.locator('#sw-explicit-primes')).toHaveClass(/on/);
+    await expect(page.locator('#sw-explicit-primes')).toHaveAttribute('aria-checked', 'true');
+    // RH-assumed wording remains intact
+    await expect(page.locator('#explicit-controls')).toContainText('誤差上限（RH を仮定した場合）');
+
+    const check = await page.evaluate(async () => {
+      const { explicitAxisPoint } = await import('/app/modes/explicit.js');
+      const s = window.__APP_STATE__;
+      const g = s.scene.getObjectByName('explicit-group');
+      const primesObj = g.getObjectByName('explicit-primes');
+      const axisObj = g.getObjectByName('explicit-axis');
+      const pos = primesObj.geometry.attributes.position;
+      const axisPos = axisObj.geometry.attributes.position;
+      const xMax = s.explicitInfo.xMax;
+      const isPrime = s.isPrimeArray;
+
+      // Count primes directly from the app's existing prime table and record indices of representative primes.
+      const targets = [2, 3, 5, 73, 7919, 104729, 319993];
+      const targetSet = new Set(targets);
+      const indexByPrime = {};
+      let expectedCount = 0;
+      for (let p = 2; p <= xMax; p++) {
+        if (isPrime[p]) {
+          if (targetSet.has(p)) indexByPrime[p] = expectedCount;
+          expectedCount++;
+        }
+      }
+
+      const samples = targets.map(p => {
+        const idx = indexByPrime[p];
+        const vx = pos.getX(idx), vy = pos.getY(idx), vz = pos.getZ(idx);
+        const exp = explicitAxisPoint(p, xMax);
+        const dist = Math.hypot(vx - exp.x, vy - exp.y, vz - exp.z);
+        const radialErr = Math.abs(Math.hypot(vx, vz) - exp.r);
+        const heightErr = Math.abs(vy - exp.h);
+        return { p, idx, dist, radialErr, heightErr };
+      });
+
+      // Prime p = 2 sits at u = 0, matching vertex 0 of explicit-axis (xs[0] = 2).
+      const p2AxisDist = Math.hypot(
+        pos.getX(0) - axisPos.getX(0),
+        pos.getY(0) - axisPos.getY(0),
+        pos.getZ(0) - axisPos.getZ(0),
+      );
+
+      const c = primesObj.material.color;
+      return {
+        isPoints: primesObj.isPoints === true,
+        visible: primesObj.visible,
+        geomUuid: primesObj.geometry.uuid,
+        vertexCount: pos.count,
+        expectedCount,
+        infoCount: s.explicitInfo.primeCount,
+        infoVisible: s.explicitInfo.primesVisible,
+        samples,
+        p2AxisDist,
+        color: { r: c.r, g: c.g, b: c.b },
+      };
+    });
+
+    expect(check.isPoints).toBe(true);
+    expect(check.visible).toBe(true);
+    expect(check.infoVisible).toBe(true);
+    expect(check.expectedCount).toBe(27608); // pi(320000)
+    expect(check.vertexCount).toBe(check.expectedCount);
+    expect(check.infoCount).toBe(check.expectedCount);
+    expect(check.p2AxisDist).toBeLessThan(1e-4);
+    // White-ish marker colour (distinct from cyan / amber / magenta / violet)
+    expect(check.color.r).toBeGreaterThan(0.9);
+    expect(check.color.g).toBeGreaterThan(0.9);
+    expect(check.color.b).toBeGreaterThan(0.9);
+    for (const s of check.samples) {
+      expect(s.idx).toBeGreaterThanOrEqual(0);
+      expect(s.dist, `prime ${s.p} distance to C(u)`).toBeLessThan(1e-2);
+      expect(s.radialErr, `prime ${s.p} radial error`).toBeLessThan(1e-2);
+      expect(s.heightErr, `prime ${s.p} height error`).toBeLessThan(1e-2);
+    }
+
+    // Toggle off: hides explicit-primes without rebuilding geometry
+    await page.locator('#explicit-primes-toggle').click();
+    await expect(page.locator('#sw-explicit-primes')).not.toHaveClass(/on/);
+    await expect(page.locator('#sw-explicit-primes')).toHaveAttribute('aria-checked', 'false');
+    const hidden = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const p = s.scene.getObjectByName('explicit-primes');
+      return {
+        visible: p.visible,
+        stateFlag: s.explicitShowPrimes,
+        infoVisible: s.explicitInfo.primesVisible,
+        geomUuid: p.geometry.uuid,
+      };
+    });
+    expect(hidden).toEqual({ visible: false, stateFlag: false, infoVisible: false, geomUuid: check.geomUuid });
+
+    // Toggle back on (also confirm View B keeps prime markers toggleable)
+    await page.locator('#explicit-view-b').click();
+    await page.locator('#explicit-primes-toggle').click();
+    await expect(page.locator('#sw-explicit-primes')).toHaveClass(/on/);
+    await expect(page.locator('#sw-explicit-primes')).toHaveAttribute('aria-checked', 'true');
+    const shown = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const p = s.scene.getObjectByName('explicit-primes');
+      return {
+        visible: p.visible,
+        stateFlag: s.explicitShowPrimes,
+        infoVisible: s.explicitInfo.primesVisible,
+        geomUuid: p.geometry.uuid,
+      };
+    });
+    expect(shown).toEqual({ visible: true, stateFlag: true, infoVisible: true, geomUuid: check.geomUuid });
+
+    // Spy on geometry/material dispose before exiting
+    await page.evaluate(() => {
+      const p = window.__APP_STATE__.scene.getObjectByName('explicit-primes');
+      window.__primeDisposed = { geom: 0, mat: 0 };
+      const origG = p.geometry.dispose.bind(p.geometry);
+      const origM = p.material.dispose.bind(p.material);
+      p.geometry.dispose = () => { window.__primeDisposed.geom++; return origG(); };
+      p.material.dispose = () => { window.__primeDisposed.mat++; return origM(); };
+    });
+
+    await enter(page); // exit explicit mode
+    const afterExit = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      return {
+        disposed: window.__primeDisposed,
+        hasPrimes: !!s.scene.getObjectByName('explicit-primes'),
+        geoms: s.renderer.info.memory.geometries,
+      };
+    });
+    expect(afterExit.disposed).toEqual({ geom: 1, mat: 1 });
+    expect(afterExit.hasPrimes).toBe(false);
+    expect(afterExit.geoms).toBe(baselineGeoms);
+    expect(errors).toEqual([]);
+  });
+
+  test('prime markers in fallback mode (M=400) still render all pi(320000) primes independently of sample count', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page, { blockWorker: true });
+    await enter(page);
+    await waitExplicitReady(page, i => i.fallback === true && i.M === 400);
+
+    const r = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const p = s.scene.getObjectByName('explicit-primes');
+      let expected = 0;
+      for (let n = 2; n <= s.explicitInfo.xMax; n++) if (s.isPrimeArray[n]) expected++;
+      return {
+        M: s.explicitInfo.M,
+        visible: p.visible,
+        vertexCount: p.geometry.attributes.position.count,
+        expected,
+      };
+    });
+    expect(r.M).toBe(400);
+    expect(r.visible).toBe(true);
+    expect(r.expected).toBe(27608);
+    expect(r.vertexCount).toBe(r.expected);
+    expect(errors.filter(e => !e.startsWith('Worker init failed'))).toEqual([]);
   });
 });

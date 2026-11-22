@@ -151,6 +151,18 @@ export function bindUIEvents(enterVRCallback) {
     if (explicitViewB) {
         explicitViewB.addEventListener('click', () => explicitMode.setView('b'));
     }
+    const swExplicitPrimes = getElement('sw-explicit-primes');
+    if (swExplicitPrimes) {
+        swExplicitPrimes.parentElement.addEventListener('click', () => {
+            explicitMode.setShowPrimes(!state.explicitShowPrimes);
+        });
+        swExplicitPrimes.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                explicitMode.setShowPrimes(!state.explicitShowPrimes);
+            }
+        });
+    }
 
     // queuedInExplicit: the request was queued while the explicit mode owned N; if the mode was left
     // before the frame ran, drop it (exit() already handed N back and resynced the Zeta Wave).

@@ -21,7 +21,7 @@ export function initElements() {
         'spacing-val', 'spacing-slider', 'range-info', 'current-state-text',
         'ui-overlay', 'show-ui-hint', 'help-tooltip', 'group-lattice', 'group-spacing',
         'group-zeta-toggle', 'group-explicit-toggle', 'sw-explicit', 'explicit-kind-psi1', 'explicit-kind-psi',
-        'explicit-view-a', 'explicit-view-b', 'group-padic-toggle', 'group-primedim-toggle'
+        'explicit-view-a', 'explicit-view-b', 'sw-explicit-primes', 'group-padic-toggle', 'group-primedim-toggle'
     ];
     for (const id of ids) {
         elements[id] = document.getElementById(id);

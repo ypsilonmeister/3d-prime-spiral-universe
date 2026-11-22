@@ -83,7 +83,8 @@ export const state = {
     explicitModeActive: false,
     explicitKind: 'psi1', // 'psi1' (default) | 'psi'
     explicitView: 'a',    // 'a' (measured + recon + shell) | 'b' (residual ribbon only; shell hidden)
-    explicitInfo: null, // read-only snapshot of the latest computation (M, N, kind, view, rms, hud, shell ring xs, fallback flag)
+    explicitShowPrimes: true, // prime markers on the reference axis C(u) (default: shown)
+    explicitInfo: null, // read-only snapshot of the latest computation (M, N, kind, view, rms, hud, shell ring xs, primeCount, primesVisible, fallback flag)
 
     // Math buffers loaded from worker
     isPrimeArray: new Uint8Array(320000 + 1),

@@ -487,6 +487,11 @@ button.active {
     border-radius: 3px;
 }
 
+.explicit-toggle-row {
+    font-size: 11px;
+    margin-bottom: 6px;
+}
+
 .explicit-legend {
     margin-top: 4px;
 }

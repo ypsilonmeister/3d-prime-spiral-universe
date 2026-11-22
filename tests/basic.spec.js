@@ -101,6 +101,64 @@ test.describe('PrimeCrystal Basic Verification', () => {
     await expect(page.locator('#group-padic-toggle')).not.toHaveClass(/ui-section-disabled/);
   });
 
+  test('should handle Sieve owner exclusivity and progress callbacks', async ({ page }) => {
+    // Reduce point count so Sieve animation runs quickly under headless software WebGL
+    await page.locator('#count-slider').fill('1000');
+    await expect(page.locator('#count-val')).toHaveText('1,000');
+
+    // Enable Sieve mode
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).toHaveClass(/on/);
+    await expect(page.locator('#sieve-controls')).toBeVisible();
+
+    // Verify Sieve UI & progress callbacks (Issue #2)
+    await expect(page.locator('#sieve-play-btn')).toHaveText('▶ Play');
+    await expect(page.locator('#sieve-stats')).toHaveText('Sieving ×2 | Primes: 1 | √N=31');
+    await page.locator('#sieve-play-btn').click();
+    await expect(page.locator('#sieve-stats')).toHaveText('Done — 168 primes found', { timeout: 15_000 });
+    await expect(page.locator('#sieve-play-btn')).toHaveText('▶ Play');
+    const progVal = await page.locator('#sieve-progress').evaluate(el => el.value);
+    expect(progVal).toBe(100);
+
+    // Verify Sieve disables other owner and conflicting sections (Issue #1)
+    await expect(page.locator('#group-primedim-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-padic-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-explicit-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-zeta-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-ntl-toggle')).toHaveClass(/ui-section-disabled/);
+
+    // Disable Sieve mode and verify sections are re-enabled
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).not.toHaveClass(/on/);
+    await expect(page.locator('#sieve-controls')).toBeHidden();
+    await expect(page.locator('#group-primedim-toggle')).not.toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-padic-toggle')).not.toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-explicit-toggle')).not.toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-zeta-toggle')).not.toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-ntl-toggle')).not.toHaveClass(/ui-section-disabled/);
+
+    // Re-enable Sieve, then activate another owner (p-adic) to verify Sieve is exited
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).toHaveClass(/on/);
+    await page.locator('#group-padic-toggle .toggle-row').dispatchEvent('click');
+
+    await expect(page.locator('#sw-padic')).toHaveClass(/on/);
+    await expect(page.locator('#sw-sieve')).not.toHaveClass(/on/);
+    await expect(page.locator('#sieve-controls')).toBeHidden();
+    await expect(page.locator('#group-sieve-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-padic-toggle')).not.toHaveClass(/ui-section-disabled/);
+    const flags = await page.evaluate(() => ({
+      sieve: window.__APP_STATE__.sieveModeActive,
+      padic: window.__APP_STATE__.padicModeActive,
+    }));
+    expect(flags).toEqual({ sieve: false, padic: true });
+
+    // Disable p-adic mode and verify Sieve section is re-enabled
+    await page.locator('#group-padic-toggle .toggle-row').click();
+    await expect(page.locator('#sw-padic')).not.toHaveClass(/on/);
+    await expect(page.locator('#group-sieve-toggle')).not.toHaveClass(/ui-section-disabled/);
+  });
+
   test('should recompute active mode variables when count changes', async ({ page }) => {
     // Enable PrimeDim mode
     await page.locator('#group-primedim-toggle .toggle-row').click();

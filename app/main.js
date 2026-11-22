@@ -11,11 +11,14 @@ import { computeNtlTables } from '../shared/arithmetic.js';
 import { createParticles, classifyNumbers } from './render/particles.js';
 import { animate, setFrameTickCallback, setSieveTickCallback } from './render/loop.js';
 
-import { initElements, setBootStage, hideBootOverlay, buildTypeUI, updateUI, setupHelpTooltips } from './ui/panels.js';
+import {
+    initElements, getElement, setBootStage, hideBootOverlay, buildTypeUI, updateUI, setupHelpTooltips,
+    onBootProgress, onSieveProgress, onSieveUIUpdate
+} from './ui/panels.js';
 import { bindUIEvents, toggleType } from './ui/bindings.js';
 
 import { initModeManager, setUIDisabledStateUpdateCallback, rebuildPositions } from './modes/mode-manager.js';
-import { sieveTick, sieveUpdateStats, setSieveCallbacks } from './modes/sieve-anim.js';
+import { sieveTick, setSieveCallbacks } from './modes/sieve-anim.js';
 
 // Debug/test handle: exposes the app state so end-to-end tests can assert on
 // committed positions. Harmless for a visualization with no secrets.
@@ -65,10 +68,10 @@ async function enterVR() {
             state.vrSession = null;
             state.controls.enabled = true;
             state.controls.autoRotate = true;
-            const btn = document.getElementById('vr-btn');
+            const btn = getElement('vr-btn');
             if (btn) btn.textContent = 'Enter VR';
         });
-        const btn = document.getElementById('vr-btn');
+        const btn = getElement('vr-btn');
         if (btn) btn.textContent = 'Exit VR';
     } catch (e) {
         console.error('VR session failed:', e);
@@ -91,7 +94,7 @@ function init() {
     state.renderer.autoClear = false;
     state.renderer.xr.enabled = true;
     
-    const container = document.getElementById('canvas-container');
+    const container = getElement('canvas-container');
     if (container) {
         container.appendChild(state.renderer.domElement);
     }
@@ -105,7 +108,7 @@ function init() {
         navigator.xr.isSessionSupported('immersive-vr').then(supported => {
             state.vrSupported = supported;
             if (supported) {
-                const btn = document.getElementById('vr-btn');
+                const btn = getElement('vr-btn');
                 if (btn) btn.style.display = '';
             }
         });
@@ -121,32 +124,7 @@ function init() {
     // Setup loop tick callbacks to update UI
     setFrameTickCallback(updateUI);
     setSieveTickCallback(sieveTick);
-
-    setSieveCallbacks(
-        // Sieve stats update
-        (finished, foundCount, limit, currentP) => {
-            const el = document.getElementById('sieve-stats');
-            if (el) {
-                if (finished) {
-                    el.textContent = `Done — ${foundCount} primes found`;
-                } else {
-                    const sqrtN = Math.floor(Math.sqrt(limit));
-                    el.textContent = `Sieving ×${currentP} | Primes: ${foundCount} | √N=${sqrtN}`;
-                }
-            }
-            const prog = document.getElementById('sieve-progress');
-            if (prog) {
-                const sqrtN = Math.floor(Math.sqrt(limit));
-                prog.value = Math.min(currentP / sqrtN, 1.0) * 100;
-            }
-        },
-        // Sieve UI play/pause update
-        () => {
-            const btn = document.getElementById('sieve-play-btn');
-            if (btn) btn.textContent = state.sievePlaying ? '⏸ Pause' : '▶ Play';
-            sieveUpdateStats();
-        }
-    );
+    setSieveCallbacks(onSieveProgress, onSieveUIUpdate);
 
     initModeManager();
     setUIDisabledStateUpdateCallback(updateUI);
@@ -192,19 +170,7 @@ async function boot() {
     ]);
     setBootStage('Spinning up worker…', 5);
     try {
-        await initWorker((stage, pct) => {
-            const stages = {
-                primes:        ['Sieving primes',           0, 15],
-                ntl_d_sigma:   ['Counting divisors',       15, 60],
-                ntl_omega_mu:  ['Factoring (ω, μ)',         60, 88],
-                ntl_phi:       ['Computing totient φ',     88, 98],
-            };
-            const s = stages[stage];
-            if (s) {
-                const [label, lo, hi] = s;
-                setBootStage(label, lo + (hi - lo) * (pct / 100));
-            }
-        });
+        await initWorker(onBootProgress);
     } catch (e) {
         console.error('Worker init failed, falling back to main-thread sieves', e);
         _fallbackBuildOnMainThread();

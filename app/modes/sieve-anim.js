@@ -188,17 +188,17 @@ export function sieveFadeStep() {
 
 export const sieveMode = {
     id: 'sieve',
-    kind: 'overlay',
+    kind: 'owner',
     enter() {
         state.sieveModeActive = true;
         state.sieveLimit = state.activePointCount;
         sieveReset();
         if (onSieveUIUpdate) onSieveUIUpdate();
     },
-    exit() {
+    exit(opts = {}) {
         state.sieveModeActive = false;
         state.sievePlaying = false;
-        updateParticleVisuals();
+        if (!opts.willRebuild) updateParticleVisuals();
     },
     onCountChange() {
         // No action on count change; requires user-driven Reset/Rebuild

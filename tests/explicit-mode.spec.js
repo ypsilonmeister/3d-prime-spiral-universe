@@ -985,9 +985,9 @@ test.describe('explicit formula mode', () => {
 
     const mid = check.samples.find(s => s.label === 'mid');
     const max = check.samples.find(s => s.label === 'max');
-    expect(mid.op).toBe('≈');
+    expect(mid.op).toBe('=');
     expect(Math.floor(mid.xDisp)).toBe(232);
-    expect(Math.abs(mid.xDisp - check.internalMidX)).toBeLessThan(1e-5);
+    expect(mid.xDisp).toBe(check.internalMidX);
     expect(mid.displayedVals).toEqual(mid.expectedVals);
 
     expect(max.op).toBe('=');
@@ -1017,6 +1017,183 @@ test.describe('explicit formula mode', () => {
     await page.keyboard.press('Enter');
     await expect(sw).toHaveAttribute('aria-checked', 'true');
     await expect(sw).toMatchAriaSnapshot('- switch "素数マーカー" [checked]');
+    expect(errors).toEqual([]);
+  });
+
+  // ---- review #309 regressions -------------------------------------------
+
+  test('HUD displayed x round-trips to reproduce all numeric rows at display precision (psi 126,700 / 140,000 and psi1 16,400 / 85,600)', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.N === 100 && i.view === 'a');
+
+    const cases = [
+      { kind: 'psi',  count: 126700, expectedMidMeas: '9.564e-4' },
+      { kind: 'psi',  count: 140000, expectedMidMeas: '6.100e-3' },
+      { kind: 'psi1', count: 16400,  expectedMidRes: '-6.944e-3' },
+      { kind: 'psi1', count: 85600,  expectedMidBound: '6381.15' },
+    ];
+
+    for (const tc of cases) {
+      const btnId = tc.kind === 'psi' ? '#explicit-kind-psi' : '#explicit-kind-psi1';
+      await page.locator(btnId).click();
+      await page.locator('#count-slider').evaluate((el, val) => {
+        el.value = String(val);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }, tc.count);
+      await expect.poll(async () => page.evaluate(({ kind, count }) => {
+        const i = window.__APP_STATE__.explicitInfo;
+        return !!(i && i.N === 100 && !i.pending && i.kind === kind && i.xMax === count);
+      }, { kind: tc.kind, count: tc.count }), { timeout: 30_000 }).toBe(true);
+
+      const check = await page.evaluate(async ({ kind, count }) => {
+        const ef = await import('/shared/explicit-formula.js');
+        const { buildSieve } = await import('/shared/sieve.js');
+        const { ZETA_ZEROS_1000 } = await import('/shared/zeta-zeros-1000.js');
+        const { formatHudNumber } = await import('/app/modes/explicit.js');
+        const tables = ef.buildPsiTables(count, buildSieve(count).spf);
+        const hudEl = document.getElementById('explicit-hud');
+        const infoSamples = window.__APP_STATE__.explicitInfo.hud.samples;
+        const samples = Array.from(hudEl.querySelectorAll('.explicit-hud-sample')).map((el, idx) => {
+          const label = el.getAttribute('data-sample');
+          const xLine = el.querySelector('.explicit-hud-x').textContent;
+          const m = xLine.match(/x\s*([=≈])\s*([0-9,]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?)/i);
+          const op = m ? m[1] : null;
+          const xDisp = m ? Number(m[2].replace(/,/g, '')) : NaN;
+          const displayedVals = Array.from(el.querySelectorAll('.explicit-hud-val')).map(v => v.textContent);
+          const base = ef.computeExplicitBaseForSamples([xDisp], tables, kind);
+          const recon = ef.computeExplicitRecon([xDisp], 100, ZETA_ZEROS_1000, kind);
+          const residual = ef.computeExplicitResidual(base.meas, recon);
+          const expectedVals = [
+            formatHudNumber(base.meas[0]),
+            formatHudNumber(recon[0]),
+            formatHudNumber(residual[0]),
+            Number.isFinite(base.bound[0]) ? formatHudNumber(base.bound[0]) : '— (x < 73.2)',
+          ];
+          return {
+            label,
+            xLine,
+            op,
+            xDisp,
+            internalX: infoSamples[idx].x,
+            displayedVals,
+            expectedVals,
+          };
+        });
+        return samples;
+      }, { kind: tc.kind, count: tc.count });
+
+      const mid = check.find(s => s.label === 'mid');
+      const max = check.find(s => s.label === 'max');
+      expect(mid.displayedVals, `${tc.kind} count=${tc.count} mid HUD rows`).toEqual(mid.expectedVals);
+      expect(mid.op, `${tc.kind} count=${tc.count} mid op`).toBe('=');
+      expect(mid.xDisp, `${tc.kind} count=${tc.count} mid x round-trip`).toBe(mid.internalX);
+      if (tc.expectedMidMeas) expect(mid.displayedVals[0]).toBe(tc.expectedMidMeas);
+      if (tc.expectedMidRes) expect(mid.displayedVals[2]).toBe(tc.expectedMidRes);
+      if (tc.expectedMidBound) expect(mid.displayedVals[3]).toBe(tc.expectedMidBound);
+
+      expect(max.op).toBe('=');
+      expect(max.xDisp).toBe(tc.count);
+      expect(max.displayedVals).toEqual(max.expectedVals);
+    }
+    expect(errors).toEqual([]);
+  });
+
+  test('formatHudX round-trips across full count sweep (100..320,000 step 100) for both psi and psi1 (M=1600 & M=400)', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+
+    const result = await page.evaluate(async () => {
+      const ef = await import('/shared/explicit-formula.js');
+      const { buildSieve } = await import('/shared/sieve.js');
+      const { ZETA_ZEROS_1000: ZEROS } = await import('/shared/zeta-zeros-1000.js');
+      const { formatHudX, formatHudNumber } = await import('/app/modes/explicit.js');
+
+      const MAX = 320000;
+      const tables = ef.buildPsiTables(MAX, buildSieve(MAX).spf);
+      const denom = ef.buildZetaDenom(ZEROS);
+
+      const fmtRow = (meas, recon, res, bound) => [
+        formatHudNumber(meas),
+        formatHudNumber(recon),
+        formatHudNumber(res),
+        Number.isFinite(bound) ? formatHudNumber(bound) : '— (x < 73.2)',
+      ];
+
+      const mismatches = [];
+      let checked = 0;
+
+      // Full review #309 sweep: all 3,200 slider counts x both kinds x both M=1600 and M=400 at N=100
+      for (const kind of ['psi', 'psi1']) {
+        for (const M of [1600, 400]) {
+          const midIdx = Math.floor((M - 1) / 2);
+          for (let count = 100; count <= MAX; count += 100) {
+            const xs = ef.logSpacedSamples(2, count, M);
+            const x = xs[midIdx];
+            const fx = formatHudX(x);
+            const xDisp = Number(fx.text.replace(/,/g, ''));
+
+            const b1 = ef.computeExplicitBaseForSamples([x], tables, kind);
+            const r1 = ef.computeExplicitRecon([x], 100, ZEROS, kind, denom);
+            const res1 = ef.computeExplicitResidual(b1.meas, r1);
+            const disp1 = fmtRow(b1.meas[0], r1[0], res1[0], b1.bound[0]);
+
+            const b2 = ef.computeExplicitBaseForSamples([xDisp], tables, kind);
+            const r2 = ef.computeExplicitRecon([xDisp], 100, ZEROS, kind, denom);
+            const res2 = ef.computeExplicitResidual(b2.meas, r2);
+            const disp2 = fmtRow(b2.meas[0], r2[0], res2[0], b2.bound[0]);
+
+            checked++;
+            if (xDisp !== x || fx.op !== '=' || disp1.join('|') !== disp2.join('|')) {
+              mismatches.push({ kind, M, N: 100, count, x, fx, xDisp, disp1, disp2 });
+            }
+          }
+        }
+      }
+
+      // Additional N sweep across representative counts (including jump & boundary cases)
+      const repCounts = [100, 27300, 71800, 85600, 126700, 140000, 246100, 320000];
+      for (const kind of ['psi', 'psi1']) {
+        for (const N of [10, 30, 300, 1000]) {
+          for (const count of repCounts) {
+            const xs = ef.logSpacedSamples(2, count, 1600);
+            for (const idx of [Math.floor((1600 - 1) / 2), 1599]) {
+              const x = xs[idx];
+              const fx = formatHudX(x);
+              const xDisp = Number(fx.text.replace(/,/g, ''));
+              const b1 = ef.computeExplicitBaseForSamples([x], tables, kind);
+              const r1 = ef.computeExplicitRecon([x], N, ZEROS, kind, denom);
+              const res1 = ef.computeExplicitResidual(b1.meas, r1);
+              const disp1 = fmtRow(b1.meas[0], r1[0], res1[0], b1.bound[0]);
+
+              const b2 = ef.computeExplicitBaseForSamples([xDisp], tables, kind);
+              const r2 = ef.computeExplicitRecon([xDisp], N, ZEROS, kind, denom);
+              const res2 = ef.computeExplicitResidual(b2.meas, r2);
+              const disp2 = fmtRow(b2.meas[0], r2[0], res2[0], b2.bound[0]);
+
+              checked++;
+              if (xDisp !== x || fx.op !== '=' || disp1.join('|') !== disp2.join('|')) {
+                mismatches.push({ kind, M: 1600, N, count, x, fx, xDisp, disp1, disp2 });
+              }
+            }
+          }
+        }
+      }
+
+      const valueMismatches = mismatches.filter(m => m.disp1.join('|') !== m.disp2.join('|'));
+      return {
+        checked,
+        mismatchCount: mismatches.length,
+        valueMismatchCount: valueMismatches.length,
+        valueSample: valueMismatches.slice(0, 5),
+        sample: mismatches.slice(0, 5),
+      };
+    });
+
+    expect(result.checked).toBe(12800 + 128);
+    expect(result.valueMismatchCount, JSON.stringify(result.valueSample)).toBe(0);
+    expect(result.mismatchCount, JSON.stringify(result.sample)).toBe(0);
     expect(errors).toEqual([]);
   });
 });

@@ -141,31 +141,29 @@ function applyPrimesVisibility() {
 
 // ---- HUD & panel DOM sync ------------------------------------------------
 
-function formatHudNumber(v) {
+export function formatHudNumber(v) {
     if (!Number.isFinite(v)) return '—';
     const abs = Math.abs(v);
     if (abs >= 1e6 || (abs > 0 && abs < 1e-2)) return v.toExponential(3);
     return v.toFixed(2);
 }
 
-function formatHudX(x) {
+export function formatHudX(x) {
     if (!Number.isFinite(x)) return { op: '=', text: '—' };
     if (Number.isInteger(x)) return { op: '=', text: x.toLocaleString('en-US') };
-    // Use enough fractional digits that rounding never crosses an integer boundary
-    // (where psi(x) has jump discontinuities at prime powers), and mark rounded values with ≈.
-    const fl = Math.floor(x);
-    for (let digits = 6; digits <= 12; digits++) {
-        const s = x.toFixed(digits);
-        const parsed = Number(s);
-        if (Math.floor(parsed) === fl) {
-            const trimmed = s.replace(/\.?0+$/, '');
-            const [intPart, fracPart] = trimmed.split('.');
-            const intFmt = Number(intPart).toLocaleString('en-US');
-            const text = fracPart ? `${intFmt}.${fracPart}` : intFmt;
-            return { op: parsed === x ? '=' : '≈', text };
-        }
-    }
-    return { op: '=', text: String(x) };
+    // Use ECMAScript's shortest exact IEEE-754 decimal round-trip representation (String(x))
+    // so parsing the displayed x back with Number() recovers the exact internal Float64 value,
+    // never crosses an integer jump discontinuity of psi(x), and reproduces every HUD row
+    // at display precision without rounding drift.
+    const s = String(x);
+    if (/[eE]/.test(s)) return { op: '=', text: s };
+    const [intPart, fracPart] = s.split('.');
+    const sign = intPart.startsWith('-') ? '-' : '';
+    const absInt = sign ? intPart.slice(1) : intPart;
+    const intFmt = sign + absInt.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const text = fracPart ? `${intFmt}.${fracPart}` : intFmt;
+    const parsed = Number(text.replace(/,/g, ''));
+    return { op: parsed === x ? '=' : '≈', text };
 }
 
 function setSegButton(id, active) {

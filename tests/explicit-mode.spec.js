@@ -45,7 +45,7 @@ test.describe('explicit formula mode', () => {
       return { pointsVisible: s.points.visible, names, glError: gl.getError(), M: s.explicitInfo.M };
     });
     expect(r.pointsVisible).toBe(false);
-    expect(r.names).toEqual(['explicit-axis', 'explicit-boundary-ring', 'explicit-measured', 'explicit-ribbon', 'explicit-shell']);
+    expect(r.names).toEqual(['explicit-axis', 'explicit-boundary-ring', 'explicit-measured', 'explicit-primes', 'explicit-ribbon', 'explicit-shell']);
     expect(r.glError).toBe(0);
     expect(r.M).toBe(1600);
     await expect(page.locator('#explicit-controls')).toContainText('誤差上限（RH を仮定した場合）');
@@ -206,7 +206,7 @@ test.describe('explicit formula mode', () => {
       { timeout: 30_000 }).toBe(true);
     await expect(page.locator('#explicit-status')).toHaveText('(fallback mode: reduced samples)');
     const n = await page.evaluate(() => window.__APP_STATE__.scene.getObjectByName('explicit-group').children.length);
-    expect(n).toBe(5);
+    expect(n).toBe(6);
     await setN(page, 50); // still interactive afterwards
   });
   // ---- review #291 regressions -------------------------------------------
@@ -363,5 +363,837 @@ test.describe('explicit formula mode', () => {
     expect(ticks).toEqual([{ n: 100, anim: false, button: 'Animate' }]);
     await expect(page.locator('#zeta-anim-btn')).toHaveText('Animate');
     expect(await page.evaluate(() => window.__APP_STATE__.zetaZeroCount)).toBe(100);
+  });
+
+  // ---- PR-C: kind switch, residual view (View B), numeric HUD, GPU leak check ----
+
+  const waitExplicitReady = (page, predicate = () => true) =>
+    expect.poll(async () => page.evaluate((predSrc) => {
+      const i = window.__APP_STATE__.explicitInfo;
+      if (!i || i.N == null || i.pending) return false;
+      return new Function('i', `return (${predSrc})(i);`)(i);
+    }, predicate.toString()), { timeout: 30_000 }).toBe(true);
+
+  test('kind switch (psi1 <-> psi): shows Gibbs note for psi, applies design scaling, keeps RH-assumed wording', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1');
+
+    // Default is psi1: Gibbs note hidden, s=0.02 documented
+    await expect(page.locator('#explicit-kind-psi1')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#explicit-kind-psi')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#explicit-gibbs-note')).toBeHidden();
+    await expect(page.locator('#explicit-scale-note')).toContainText('0.02');
+    await expect(page.locator('#explicit-controls')).toContainText('誤差上限（RH を仮定した場合）');
+    await expect(page.locator('#explicit-controls')).not.toContainText('証明済み');
+
+    const yRefPsi1 = await page.evaluate(async () => {
+      const ef = await import('/shared/explicit-formula.js');
+      const s = window.__APP_STATE__;
+      const expected = ef.compressionRef(s.explicitInfo.hud.samples[1].bound, s.explicitInfo.xMax, 'psi1');
+      return { got: s.explicitInfo.yRef, expected };
+    });
+    expect(Math.abs(yRefPsi1.got - yRefPsi1.expected)).toBeLessThan(1e-12);
+
+    // Switch to psi: Gibbs note visible, s=0.25 scaling applied, shell still starts at 73.2
+    await page.locator('#explicit-kind-psi').click();
+    await waitExplicitReady(page, i => i.kind === 'psi');
+    await expect(page.locator('#explicit-kind-psi')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#explicit-kind-psi1')).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('#explicit-gibbs-note')).toBeVisible();
+    await expect(page.locator('#explicit-gibbs-note')).toContainText('Gibbs');
+    await expect(page.locator('#explicit-gibbs-note')).toContainText('単調ではありません');
+    await expect(page.locator('#explicit-scale-note')).toContainText('0.25');
+    await expect(page.locator('#explicit-controls')).toContainText('誤差上限（RH を仮定した場合）');
+
+    const psiCheck = await page.evaluate(async () => {
+      const ef = await import('/shared/explicit-formula.js');
+      const s = window.__APP_STATE__;
+      const expectedYRef = ef.compressionRef(s.explicitInfo.hud.samples[1].bound, s.explicitInfo.xMax, 'psi');
+      const gl = s.renderer.getContext();
+      return {
+        gotYRef: s.explicitInfo.yRef,
+        expectedYRef,
+        minShellX: Math.min(...s.explicitInfo.shellX),
+        glError: gl.getError(),
+      };
+    });
+    expect(Math.abs(psiCheck.gotYRef - psiCheck.expectedYRef)).toBeLessThan(1e-12);
+    expect(psiCheck.minShellX).toBe(73.2);
+    expect(psiCheck.glError).toBe(0);
+
+    // Switch back to psi1: Gibbs note hidden again
+    await page.locator('#explicit-kind-psi1').click();
+    await waitExplicitReady(page, i => i.kind === 'psi1');
+    await expect(page.locator('#explicit-gibbs-note')).toBeHidden();
+    expect(errors).toEqual([]);
+  });
+
+  test('residual view (View B): auto-hides shell, restores on View A, and caches measured/shell across N changes', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.view === 'a');
+
+    const snapshot = () => page.evaluate(() => {
+      const g = window.__APP_STATE__.scene.getObjectByName('explicit-group');
+      const byName = Object.fromEntries(g.children.map(c => [c.name, { visible: c.visible, uuid: c.geometry.uuid }]));
+      const ribPos = g.getObjectByName('explicit-ribbon').geometry.attributes.position.array;
+      return {
+        byName,
+        shellVisibleInfo: window.__APP_STATE__.explicitInfo.shellVisible,
+        ribbonHead: Array.from(ribPos.slice(0, 12)),
+        ribbonTail: Array.from(ribPos.slice(-12)),
+      };
+    });
+
+    const viewA1 = await snapshot();
+    expect(viewA1.byName['explicit-shell'].visible).toBe(true);
+    expect(viewA1.byName['explicit-boundary-ring'].visible).toBe(true);
+    expect(viewA1.byName['explicit-measured'].visible).toBe(true);
+    expect(viewA1.byName['explicit-ribbon'].visible).toBe(true);
+    expect(viewA1.shellVisibleInfo).toBe(true);
+
+    // Switch to View B (residual only): shell, boundary ring, and measured curve hide automatically
+    await page.locator('#explicit-view-b').click();
+    await expect(page.locator('#explicit-view-b')).toHaveAttribute('aria-pressed', 'true');
+    const viewB1 = await snapshot();
+    expect(viewB1.byName['explicit-shell'].visible).toBe(false);
+    expect(viewB1.byName['explicit-boundary-ring'].visible).toBe(false);
+    expect(viewB1.byName['explicit-measured'].visible).toBe(false);
+    expect(viewB1.byName['explicit-axis'].visible).toBe(true);
+    expect(viewB1.byName['explicit-ribbon'].visible).toBe(true);
+    expect(viewB1.shellVisibleInfo).toBe(false);
+    // Ribbon geometry updated in-place to plot residual (different positions from View A reconstruction)
+    expect(viewB1.ribbonTail).not.toEqual(viewA1.ribbonTail);
+    for (const name of Object.keys(viewA1.byName)) {
+      expect(viewB1.byName[name].uuid).toBe(viewA1.byName[name].uuid);
+    }
+
+    // Changing N in View B recomputes only reconstruction/residual; measured & shell stay cached and hidden
+    await setN(page, 300);
+    const viewB2 = await snapshot();
+    expect(viewB2.byName['explicit-shell'].visible).toBe(false);
+    expect(viewB2.byName['explicit-boundary-ring'].visible).toBe(false);
+    expect(viewB2.byName['explicit-measured'].visible).toBe(false);
+    expect(viewB2.ribbonTail).not.toEqual(viewB1.ribbonTail);
+    for (const name of Object.keys(viewA1.byName)) {
+      expect(viewB2.byName[name].uuid).toBe(viewA1.byName[name].uuid);
+    }
+
+    // Returning to View A restores shell, boundary ring, and measured curve from cache
+    await page.locator('#explicit-view-a').click();
+    await expect(page.locator('#explicit-view-a')).toHaveAttribute('aria-pressed', 'true');
+    const viewA2 = await snapshot();
+    expect(viewA2.byName['explicit-shell'].visible).toBe(true);
+    expect(viewA2.byName['explicit-boundary-ring'].visible).toBe(true);
+    expect(viewA2.byName['explicit-measured'].visible).toBe(true);
+    expect(viewA2.shellVisibleInfo).toBe(true);
+    for (const name of Object.keys(viewA1.byName)) {
+      expect(viewA2.byName[name].uuid).toBe(viewA1.byName[name].uuid);
+    }
+    expect(errors).toEqual([]);
+  });
+
+  test('numeric HUD displays representative x values matching shared pure functions across kind / N / view', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.N === 100);
+
+    const checkHudMatchesShared = async (expectedKind, expectedN, expectedView) => {
+      const res = await page.evaluate(async ({ expectedKind, expectedN, expectedView }) => {
+        const ef = await import('/shared/explicit-formula.js');
+        const { buildSieve } = await import('/shared/sieve.js');
+        const { ZETA_ZEROS_1000 } = await import('/shared/zeta-zeros-1000.js');
+        const s = window.__APP_STATE__;
+        const info = s.explicitInfo;
+        const tables = ef.buildPsiTables(info.xMax, buildSieve(info.xMax).spf);
+        const base = ef.computeExplicitBase(info.xMax, info.M, tables, expectedKind);
+        const recon = ef.computeExplicitRecon(base.xs, expectedN, ZETA_ZEROS_1000, expectedKind);
+        const residual = ef.computeExplicitResidual(base.meas, recon);
+        const expectedHud = ef.computeExplicitHud(base.xs, base.meas, recon, base.bound, residual);
+
+        const hudEl = document.getElementById('explicit-hud');
+        const sampleEls = Array.from(hudEl.querySelectorAll('.explicit-hud-sample'));
+        const domRaws = sampleEls.map(el => ({
+          label: el.getAttribute('data-sample'),
+          raws: Array.from(el.querySelectorAll('.explicit-hud-val')).map(v => Number(v.getAttribute('data-raw'))),
+        }));
+        return {
+          kind: info.kind,
+          N: info.N,
+          view: info.view,
+          text: hudEl.textContent,
+          gotHud: info.hud,
+          expectedHud,
+          domRaws,
+        };
+      }, { expectedKind, expectedN, expectedView });
+
+      expect(res.kind).toBe(expectedKind);
+      expect(res.N).toBe(expectedN);
+      expect(res.view).toBe(expectedView);
+      expect(res.text).toContain(`N=${expectedN}`);
+      expect(res.gotHud.samples).toHaveLength(2);
+      expect(Math.abs(res.gotHud.rms - res.expectedHud.rms)).toBeLessThan(1e-9);
+      for (let i = 0; i < 2; i++) {
+        const g = res.gotHud.samples[i], e = res.expectedHud.samples[i];
+        expect(g.label).toBe(e.label);
+        expect(g.x).toBe(e.x);
+        expect(Math.abs(g.measured - e.measured)).toBeLessThan(1e-9);
+        expect(Math.abs(g.recon - e.recon)).toBeLessThan(1e-9);
+        expect(Math.abs(g.residual - e.residual)).toBeLessThan(1e-9);
+        expect(Math.abs(g.bound - e.bound)).toBeLessThan(1e-9);
+        // DOM data-raw values match the exact shared-function values (order reflects View A vs View B)
+        const expectedDomOrder = expectedView === 'b'
+          ? [e.residual, e.measured, e.recon, e.bound]
+          : [e.measured, e.recon, e.residual, e.bound];
+        expect(res.domRaws[i].label).toBe(e.label);
+        for (let j = 0; j < 4; j++) {
+          expect(Math.abs(res.domRaws[i].raws[j] - expectedDomOrder[j])).toBeLessThan(1e-9);
+        }
+      }
+    };
+
+    await checkHudMatchesShared('psi1', 100, 'a');
+    await setN(page, 250);
+    await checkHudMatchesShared('psi1', 250, 'a');
+
+    await page.locator('#explicit-view-b').click();
+    await checkHudMatchesShared('psi1', 250, 'b');
+    await expect(page.locator('#explicit-hud')).toContainText('ビュー B');
+
+    await page.locator('#explicit-kind-psi').click();
+    await waitExplicitReady(page, i => i.kind === 'psi' && i.N === 250);
+    await checkHudMatchesShared('psi', 250, 'b');
+    await expect(page.locator('#explicit-hud')).toContainText('B(x)');
+    expect(errors).toEqual([]);
+  });
+
+  test('GPU resource leak check: repeated enter/exit, kind/view switches, and aborted enter do not leak WebGL resources', async ({ page }) => {
+    test.setTimeout(180_000);
+    const errors = await boot(page);
+
+    const waitFrames = (n = 3) => page.evaluate((count) => new Promise(resolve => {
+      let left = count;
+      const tick = () => (--left <= 0 ? resolve() : requestAnimationFrame(tick));
+      requestAnimationFrame(tick);
+    }), n);
+
+    const measureGpu = () => page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      let sceneObjects = 0;
+      const materials = new Set();
+      s.scene.traverse(o => {
+        sceneObjects++;
+        if (o.material) {
+          for (const m of (Array.isArray(o.material) ? o.material : [o.material])) materials.add(m.uuid);
+        }
+      });
+      const mem = s.renderer.info.memory;
+      return {
+        geometries: mem.geometries,
+        textures: mem.textures,
+        programs: s.renderer.info.programs ? s.renderer.info.programs.length : 0,
+        sceneObjects,
+        materialCount: materials.size,
+        hasExplicitGroup: !!s.scene.getObjectByName('explicit-group'),
+        glError: s.renderer.getContext().getError(),
+      };
+    });
+
+    await waitFrames(4);
+    const baseline = await measureGpu();
+    expect(baseline.hasExplicitGroup).toBe(false);
+    expect(baseline.glError).toBe(0);
+
+    const activeStats = [];
+    const exitStats = [];
+
+    for (let cycle = 0; cycle < 5; cycle++) {
+      await enter(page);
+      await waitExplicitReady(page, i => i.N != null);
+      // Exercise kind switch, view switch, and N change inside the mode
+      if (cycle % 2 === 0) {
+        await page.locator('#explicit-kind-psi').click();
+        await waitExplicitReady(page, i => i.kind === 'psi');
+        await page.locator('#explicit-view-b').click();
+        await waitFrames(2);
+        await page.locator('#explicit-view-a').click();
+        await page.locator('#explicit-kind-psi1').click();
+        await waitExplicitReady(page, i => i.kind === 'psi1');
+      } else {
+        await setN(page, 50 + cycle * 20);
+        await page.locator('#explicit-primes-toggle').click();
+        await page.locator('#explicit-view-b').click();
+        await waitFrames(2);
+        await page.locator('#explicit-primes-toggle').click();
+        await page.locator('#explicit-view-a').click();
+      }
+      await waitFrames(3);
+      activeStats.push(await measureGpu());
+
+      await enter(page); // exit
+      await waitFrames(3);
+      exitStats.push(await measureGpu());
+    }
+
+    // Rapid enter + immediate exit (aborting in-flight worker rebuild) must also leave zero leaks.
+    await page.evaluate(() => {
+      const row = document.querySelector('#group-explicit-toggle .toggle-row');
+      row.click();
+      row.click();
+    });
+    await waitFrames(4);
+    const afterRapid = await measureGpu();
+
+    console.log('GPU leak check baseline:', JSON.stringify(baseline));
+    console.log('GPU leak check activeStats:', JSON.stringify(activeStats));
+    console.log('GPU leak check exitStats:', JSON.stringify(exitStats));
+    console.log('GPU leak check afterRapid:', JSON.stringify(afterRapid));
+
+    for (const st of exitStats) {
+      expect(st.geometries).toBe(baseline.geometries);
+      expect(st.textures).toBe(baseline.textures);
+      expect(st.sceneObjects).toBe(baseline.sceneObjects);
+      expect(st.materialCount).toBe(baseline.materialCount);
+      expect(st.hasExplicitGroup).toBe(false);
+      expect(st.glError).toBe(0);
+    }
+    expect(afterRapid.geometries).toBe(baseline.geometries);
+    expect(afterRapid.textures).toBe(baseline.textures);
+    expect(afterRapid.sceneObjects).toBe(baseline.sceneObjects);
+    expect(afterRapid.materialCount).toBe(baseline.materialCount);
+    expect(afterRapid.hasExplicitGroup).toBe(false);
+    expect(afterRapid.glError).toBe(0);
+
+    // Active resource counts must stay bounded/constant across all 5 cycles (no monotonic growth).
+    for (const st of activeStats) {
+      expect(st.geometries).toBe(activeStats[0].geometries);
+      expect(st.textures).toBe(baseline.textures);
+      expect(st.sceneObjects).toBe(activeStats[0].sceneObjects);
+      expect(st.materialCount).toBe(activeStats[0].materialCount);
+      expect(st.glError).toBe(0);
+    }
+    expect(activeStats[activeStats.length - 1].programs).toBeLessThanOrEqual(activeStats[0].programs);
+    expect(errors).toEqual([]);
+  });
+
+  // ---- PR-C follow-up: prime markers on reference axis C(u) ---------------
+
+  test('prime markers: count matches app prime table (pi(320000)), positions sit on axis C(u), toggle works, and exit disposes resources', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+
+    const baselineGeoms = await page.evaluate(() => window.__APP_STATE__.renderer.info.memory.geometries);
+    await enter(page);
+    await waitExplicitReady(page, i => i.N != null);
+
+    // Legend includes prime entry and toggle defaults to visible (on)
+    await expect(page.locator('#explicit-legend')).toContainText('素数');
+    await expect(page.locator('#sw-explicit-primes')).toHaveClass(/on/);
+    await expect(page.locator('#sw-explicit-primes')).toHaveAttribute('aria-checked', 'true');
+    // RH-assumed wording remains intact
+    await expect(page.locator('#explicit-controls')).toContainText('誤差上限（RH を仮定した場合）');
+
+    const check = await page.evaluate(async () => {
+      const { explicitAxisPoint } = await import('/app/modes/explicit.js');
+      const s = window.__APP_STATE__;
+      const g = s.scene.getObjectByName('explicit-group');
+      const primesObj = g.getObjectByName('explicit-primes');
+      const axisObj = g.getObjectByName('explicit-axis');
+      const pos = primesObj.geometry.attributes.position;
+      const axisPos = axisObj.geometry.attributes.position;
+      const xMax = s.explicitInfo.xMax;
+      const isPrime = s.isPrimeArray;
+
+      // Count primes directly from the app's existing prime table and record indices of representative primes.
+      const targets = [2, 3, 5, 73, 7919, 104729, 319993];
+      const targetSet = new Set(targets);
+      const indexByPrime = {};
+      let expectedCount = 0;
+      for (let p = 2; p <= xMax; p++) {
+        if (isPrime[p]) {
+          if (targetSet.has(p)) indexByPrime[p] = expectedCount;
+          expectedCount++;
+        }
+      }
+
+      const samples = targets.map(p => {
+        const idx = indexByPrime[p];
+        const vx = pos.getX(idx), vy = pos.getY(idx), vz = pos.getZ(idx);
+        const exp = explicitAxisPoint(p, xMax);
+        const dist = Math.hypot(vx - exp.x, vy - exp.y, vz - exp.z);
+        const radialErr = Math.abs(Math.hypot(vx, vz) - exp.r);
+        const heightErr = Math.abs(vy - exp.h);
+        return { p, idx, dist, radialErr, heightErr };
+      });
+
+      // Prime p = 2 sits at u = 0, matching vertex 0 of explicit-axis (xs[0] = 2).
+      const p2AxisDist = Math.hypot(
+        pos.getX(0) - axisPos.getX(0),
+        pos.getY(0) - axisPos.getY(0),
+        pos.getZ(0) - axisPos.getZ(0),
+      );
+
+      const c = primesObj.material.color;
+      return {
+        isPoints: primesObj.isPoints === true,
+        visible: primesObj.visible,
+        geomUuid: primesObj.geometry.uuid,
+        vertexCount: pos.count,
+        expectedCount,
+        infoCount: s.explicitInfo.primeCount,
+        infoVisible: s.explicitInfo.primesVisible,
+        samples,
+        p2AxisDist,
+        color: { r: c.r, g: c.g, b: c.b },
+      };
+    });
+
+    expect(check.isPoints).toBe(true);
+    expect(check.visible).toBe(true);
+    expect(check.infoVisible).toBe(true);
+    expect(check.expectedCount).toBe(27608); // pi(320000)
+    expect(check.vertexCount).toBe(check.expectedCount);
+    expect(check.infoCount).toBe(check.expectedCount);
+    expect(check.p2AxisDist).toBeLessThan(1e-4);
+    // White-ish marker colour (distinct from cyan / amber / magenta / violet)
+    expect(check.color.r).toBeGreaterThan(0.9);
+    expect(check.color.g).toBeGreaterThan(0.9);
+    expect(check.color.b).toBeGreaterThan(0.9);
+    for (const s of check.samples) {
+      expect(s.idx).toBeGreaterThanOrEqual(0);
+      expect(s.dist, `prime ${s.p} distance to C(u)`).toBeLessThan(1e-2);
+      expect(s.radialErr, `prime ${s.p} radial error`).toBeLessThan(1e-2);
+      expect(s.heightErr, `prime ${s.p} height error`).toBeLessThan(1e-2);
+    }
+
+    // Toggle off: hides explicit-primes without rebuilding geometry
+    await page.locator('#explicit-primes-toggle').click();
+    await expect(page.locator('#sw-explicit-primes')).not.toHaveClass(/on/);
+    await expect(page.locator('#sw-explicit-primes')).toHaveAttribute('aria-checked', 'false');
+    const hidden = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const p = s.scene.getObjectByName('explicit-primes');
+      return {
+        visible: p.visible,
+        stateFlag: s.explicitShowPrimes,
+        infoVisible: s.explicitInfo.primesVisible,
+        geomUuid: p.geometry.uuid,
+      };
+    });
+    expect(hidden).toEqual({ visible: false, stateFlag: false, infoVisible: false, geomUuid: check.geomUuid });
+
+    // Toggle back on (also confirm View B keeps prime markers toggleable)
+    await page.locator('#explicit-view-b').click();
+    await page.locator('#explicit-primes-toggle').click();
+    await expect(page.locator('#sw-explicit-primes')).toHaveClass(/on/);
+    await expect(page.locator('#sw-explicit-primes')).toHaveAttribute('aria-checked', 'true');
+    const shown = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const p = s.scene.getObjectByName('explicit-primes');
+      return {
+        visible: p.visible,
+        stateFlag: s.explicitShowPrimes,
+        infoVisible: s.explicitInfo.primesVisible,
+        geomUuid: p.geometry.uuid,
+      };
+    });
+    expect(shown).toEqual({ visible: true, stateFlag: true, infoVisible: true, geomUuid: check.geomUuid });
+
+    // Spy on geometry/material dispose before exiting
+    await page.evaluate(() => {
+      const p = window.__APP_STATE__.scene.getObjectByName('explicit-primes');
+      window.__primeDisposed = { geom: 0, mat: 0 };
+      const origG = p.geometry.dispose.bind(p.geometry);
+      const origM = p.material.dispose.bind(p.material);
+      p.geometry.dispose = () => { window.__primeDisposed.geom++; return origG(); };
+      p.material.dispose = () => { window.__primeDisposed.mat++; return origM(); };
+    });
+
+    await enter(page); // exit explicit mode
+    const afterExit = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      return {
+        disposed: window.__primeDisposed,
+        hasPrimes: !!s.scene.getObjectByName('explicit-primes'),
+        geoms: s.renderer.info.memory.geometries,
+      };
+    });
+    expect(afterExit.disposed).toEqual({ geom: 1, mat: 1 });
+    expect(afterExit.hasPrimes).toBe(false);
+    expect(afterExit.geoms).toBe(baselineGeoms);
+    expect(errors).toEqual([]);
+  });
+
+  test('prime markers in fallback mode (M=400) still render all pi(320000) primes independently of sample count', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page, { blockWorker: true });
+    await enter(page);
+    await waitExplicitReady(page, i => i.fallback === true && i.M === 400);
+
+    const r = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const p = s.scene.getObjectByName('explicit-primes');
+      let expected = 0;
+      for (let n = 2; n <= s.explicitInfo.xMax; n++) if (s.isPrimeArray[n]) expected++;
+      return {
+        M: s.explicitInfo.M,
+        visible: p.visible,
+        vertexCount: p.geometry.attributes.position.count,
+        expected,
+      };
+    });
+    expect(r.M).toBe(400);
+    expect(r.visible).toBe(true);
+    expect(r.expected).toBe(27608);
+    expect(r.vertexCount).toBe(r.expected);
+    expect(errors.filter(e => !e.startsWith('Worker init failed'))).toEqual([]);
+  });
+
+  // ---- review #305 regressions -------------------------------------------
+
+  test('View A -> View B recomputes ribbon boundingSphere so close-up frustum does not cull farthest vertex', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.N === 100 && i.view === 'a');
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const checkCloseUp = () => page.evaluate(async () => {
+      const THREE = await import('three');
+      const s = window.__APP_STATE__;
+      const ribbon = s.scene.getObjectByName('explicit-ribbon');
+      const bs = ribbon.geometry.boundingSphere;
+      const pos = ribbon.geometry.attributes.position;
+      let maxDist = -1;
+      const far = new THREE.Vector3();
+      const v = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i);
+        const d = v.distanceTo(bs.center);
+        if (d > maxDist) { maxDist = d; far.copy(v); }
+      }
+      const cam = s.camera.clone();
+      const dirToCenter = bs.center.clone().sub(far).normalize();
+      cam.position.copy(far).addScaledVector(dirToCenter, 5);
+      cam.lookAt(far);
+      cam.updateMatrixWorld(true);
+      cam.updateProjectionMatrix();
+      const frustum = new THREE.Frustum().setFromProjectionMatrix(
+        new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse)
+      );
+      const intersects = frustum.intersectsObject(ribbon);
+
+      let renderCalls = 0;
+      const prevOnBeforeRender = ribbon.onBeforeRender;
+      ribbon.onBeforeRender = function (...args) {
+        renderCalls++;
+        return prevOnBeforeRender.apply(this, args);
+      };
+      try {
+        s.renderer.render(s.scene, cam);
+      } finally {
+        ribbon.onBeforeRender = prevOnBeforeRender;
+      }
+
+      return {
+        hasSphere: !!bs,
+        radius: bs.radius,
+        maxDist,
+        intersects,
+        renderCalls,
+        glError: s.renderer.getContext().getError(),
+      };
+    });
+
+    await page.locator('#explicit-view-b').click();
+    await expect(page.locator('#explicit-view-b')).toHaveAttribute('aria-pressed', 'true');
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const afterB = await checkCloseUp();
+    expect(afterB.hasSphere).toBe(true);
+    expect(afterB.radius).toBeGreaterThanOrEqual(afterB.maxDist - 1e-3);
+    expect(afterB.intersects).toBe(true);
+    expect(afterB.renderCalls).toBe(1);
+    expect(afterB.glError).toBe(0);
+
+    // Changing N in View B also updates vertices in-place and must keep boundingSphere valid
+    await setN(page, 10);
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const afterN = await checkCloseUp();
+    expect(afterN.radius).toBeGreaterThanOrEqual(afterN.maxDist - 1e-3);
+    expect(afterN.intersects).toBe(true);
+    expect(afterN.renderCalls).toBe(1);
+    expect(afterN.glError).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  test('HUD displayed x matches shared functions at display precision across psi jump discontinuity (count=27,300)', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.N === 100);
+
+    await page.locator('#explicit-kind-psi').click();
+    await waitExplicitReady(page, i => i.kind === 'psi' && i.N === 100);
+
+    await page.locator('#count-slider').evaluate(el => {
+      el.value = '27300';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await waitExplicitReady(page, i => i.kind === 'psi' && i.N === 100 && i.xMax === 27300);
+
+    const check = await page.evaluate(async () => {
+      const ef = await import('/shared/explicit-formula.js');
+      const { buildSieve } = await import('/shared/sieve.js');
+      const { ZETA_ZEROS_1000 } = await import('/shared/zeta-zeros-1000.js');
+      const formatHudNumber = v => {
+        if (!Number.isFinite(v)) return '—';
+        const abs = Math.abs(v);
+        if (abs >= 1e6 || (abs > 0 && abs < 1e-2)) return v.toExponential(3);
+        return v.toFixed(2);
+      };
+      const tables = ef.buildPsiTables(27300, buildSieve(27300).spf);
+      const hudEl = document.getElementById('explicit-hud');
+      const samples = Array.from(hudEl.querySelectorAll('.explicit-hud-sample')).map(el => {
+        const label = el.getAttribute('data-sample');
+        const xLine = el.querySelector('.explicit-hud-x').textContent;
+        const m = xLine.match(/x\s*([=≈])\s*([0-9,]+(?:\.[0-9]+)?)/);
+        const op = m ? m[1] : null;
+        const xDisp = m ? Number(m[2].replace(/,/g, '')) : NaN;
+        const displayedVals = Array.from(el.querySelectorAll('.explicit-hud-val')).map(v => v.textContent);
+        const base = ef.computeExplicitBaseForSamples([xDisp], tables, 'psi');
+        const recon = ef.computeExplicitRecon([xDisp], 100, ZETA_ZEROS_1000, 'psi');
+        const residual = ef.computeExplicitResidual(base.meas, recon);
+        const expectedVals = [
+          formatHudNumber(base.meas[0]),
+          formatHudNumber(recon[0]),
+          formatHudNumber(residual[0]),
+          formatHudNumber(base.bound[0]),
+        ];
+        return { label, xLine, op, xDisp, displayedVals, expectedVals };
+      });
+      return {
+        internalMidX: window.__APP_STATE__.explicitInfo.hud.samples[0].x,
+        samples,
+      };
+    });
+
+    const mid = check.samples.find(s => s.label === 'mid');
+    const max = check.samples.find(s => s.label === 'max');
+    expect(mid.op).toBe('=');
+    expect(Math.floor(mid.xDisp)).toBe(232);
+    expect(mid.xDisp).toBe(check.internalMidX);
+    expect(mid.displayedVals).toEqual(mid.expectedVals);
+
+    expect(max.op).toBe('=');
+    expect(max.xDisp).toBe(27300);
+    expect(max.displayedVals).toEqual(max.expectedVals);
+    expect(errors).toEqual([]);
+  });
+
+  test('prime markers switch exposes accessible name via aria-labelledby and toggles via keyboard', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.N != null);
+
+    const sw = page.getByRole('switch', { name: '素数マーカー' });
+    await expect(sw).toHaveCount(1);
+    await expect(sw).toBeVisible();
+    await expect(sw).toHaveAttribute('id', 'sw-explicit-primes');
+    await expect(sw).toHaveAttribute('aria-checked', 'true');
+    await expect(sw).toMatchAriaSnapshot('- switch "素数マーカー" [checked]');
+
+    await sw.focus();
+    await page.keyboard.press('Space');
+    await expect(sw).toHaveAttribute('aria-checked', 'false');
+    await expect(sw).toMatchAriaSnapshot('- switch "素数マーカー"');
+
+    await page.keyboard.press('Enter');
+    await expect(sw).toHaveAttribute('aria-checked', 'true');
+    await expect(sw).toMatchAriaSnapshot('- switch "素数マーカー" [checked]');
+    expect(errors).toEqual([]);
+  });
+
+  // ---- review #309 regressions -------------------------------------------
+
+  test('HUD displayed x round-trips to reproduce all numeric rows at display precision (psi 126,700 / 140,000 and psi1 16,400 / 85,600)', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.N === 100 && i.view === 'a');
+
+    const cases = [
+      { kind: 'psi',  count: 126700, expectedMidMeas: '9.564e-4' },
+      { kind: 'psi',  count: 140000, expectedMidMeas: '6.100e-3' },
+      { kind: 'psi1', count: 16400,  expectedMidRes: '-6.944e-3' },
+      { kind: 'psi1', count: 85600,  expectedMidBound: '6381.15' },
+    ];
+
+    for (const tc of cases) {
+      const btnId = tc.kind === 'psi' ? '#explicit-kind-psi' : '#explicit-kind-psi1';
+      await page.locator(btnId).click();
+      await page.locator('#count-slider').evaluate((el, val) => {
+        el.value = String(val);
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }, tc.count);
+      await expect.poll(async () => page.evaluate(({ kind, count }) => {
+        const i = window.__APP_STATE__.explicitInfo;
+        return !!(i && i.N === 100 && !i.pending && i.kind === kind && i.xMax === count);
+      }, { kind: tc.kind, count: tc.count }), { timeout: 30_000 }).toBe(true);
+
+      const check = await page.evaluate(async ({ kind, count }) => {
+        const ef = await import('/shared/explicit-formula.js');
+        const { buildSieve } = await import('/shared/sieve.js');
+        const { ZETA_ZEROS_1000 } = await import('/shared/zeta-zeros-1000.js');
+        const { formatHudNumber } = await import('/app/modes/explicit.js');
+        const tables = ef.buildPsiTables(count, buildSieve(count).spf);
+        const hudEl = document.getElementById('explicit-hud');
+        const infoSamples = window.__APP_STATE__.explicitInfo.hud.samples;
+        const samples = Array.from(hudEl.querySelectorAll('.explicit-hud-sample')).map((el, idx) => {
+          const label = el.getAttribute('data-sample');
+          const xLine = el.querySelector('.explicit-hud-x').textContent;
+          const m = xLine.match(/x\s*([=≈])\s*([0-9,]+(?:\.[0-9]+)?(?:e[+-]?[0-9]+)?)/i);
+          const op = m ? m[1] : null;
+          const xDisp = m ? Number(m[2].replace(/,/g, '')) : NaN;
+          const displayedVals = Array.from(el.querySelectorAll('.explicit-hud-val')).map(v => v.textContent);
+          const base = ef.computeExplicitBaseForSamples([xDisp], tables, kind);
+          const recon = ef.computeExplicitRecon([xDisp], 100, ZETA_ZEROS_1000, kind);
+          const residual = ef.computeExplicitResidual(base.meas, recon);
+          const expectedVals = [
+            formatHudNumber(base.meas[0]),
+            formatHudNumber(recon[0]),
+            formatHudNumber(residual[0]),
+            Number.isFinite(base.bound[0]) ? formatHudNumber(base.bound[0]) : '— (x < 73.2)',
+          ];
+          return {
+            label,
+            xLine,
+            op,
+            xDisp,
+            internalX: infoSamples[idx].x,
+            displayedVals,
+            expectedVals,
+          };
+        });
+        return samples;
+      }, { kind: tc.kind, count: tc.count });
+
+      const mid = check.find(s => s.label === 'mid');
+      const max = check.find(s => s.label === 'max');
+      expect(mid.displayedVals, `${tc.kind} count=${tc.count} mid HUD rows`).toEqual(mid.expectedVals);
+      expect(mid.op, `${tc.kind} count=${tc.count} mid op`).toBe('=');
+      expect(mid.xDisp, `${tc.kind} count=${tc.count} mid x round-trip`).toBe(mid.internalX);
+      if (tc.expectedMidMeas) expect(mid.displayedVals[0]).toBe(tc.expectedMidMeas);
+      if (tc.expectedMidRes) expect(mid.displayedVals[2]).toBe(tc.expectedMidRes);
+      if (tc.expectedMidBound) expect(mid.displayedVals[3]).toBe(tc.expectedMidBound);
+
+      expect(max.op).toBe('=');
+      expect(max.xDisp).toBe(tc.count);
+      expect(max.displayedVals).toEqual(max.expectedVals);
+    }
+    expect(errors).toEqual([]);
+  });
+
+  test('formatHudX round-trips across full count sweep (100..320,000 step 100) for both psi and psi1 (M=1600 & M=400)', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+
+    const result = await page.evaluate(async () => {
+      const ef = await import('/shared/explicit-formula.js');
+      const { buildSieve } = await import('/shared/sieve.js');
+      const { ZETA_ZEROS_1000: ZEROS } = await import('/shared/zeta-zeros-1000.js');
+      const { formatHudX, formatHudNumber } = await import('/app/modes/explicit.js');
+
+      const MAX = 320000;
+      const tables = ef.buildPsiTables(MAX, buildSieve(MAX).spf);
+      const denom = ef.buildZetaDenom(ZEROS);
+
+      const fmtRow = (meas, recon, res, bound) => [
+        formatHudNumber(meas),
+        formatHudNumber(recon),
+        formatHudNumber(res),
+        Number.isFinite(bound) ? formatHudNumber(bound) : '— (x < 73.2)',
+      ];
+
+      const mismatches = [];
+      let checked = 0;
+
+      // Full review #309 sweep: all 3,200 slider counts x both kinds x both M=1600 and M=400 at N=100
+      for (const kind of ['psi', 'psi1']) {
+        for (const M of [1600, 400]) {
+          const midIdx = Math.floor((M - 1) / 2);
+          for (let count = 100; count <= MAX; count += 100) {
+            const xs = ef.logSpacedSamples(2, count, M);
+            const x = xs[midIdx];
+            const fx = formatHudX(x);
+            const xDisp = Number(fx.text.replace(/,/g, ''));
+
+            const b1 = ef.computeExplicitBaseForSamples([x], tables, kind);
+            const r1 = ef.computeExplicitRecon([x], 100, ZEROS, kind, denom);
+            const res1 = ef.computeExplicitResidual(b1.meas, r1);
+            const disp1 = fmtRow(b1.meas[0], r1[0], res1[0], b1.bound[0]);
+
+            const b2 = ef.computeExplicitBaseForSamples([xDisp], tables, kind);
+            const r2 = ef.computeExplicitRecon([xDisp], 100, ZEROS, kind, denom);
+            const res2 = ef.computeExplicitResidual(b2.meas, r2);
+            const disp2 = fmtRow(b2.meas[0], r2[0], res2[0], b2.bound[0]);
+
+            checked++;
+            if (xDisp !== x || fx.op !== '=' || disp1.join('|') !== disp2.join('|')) {
+              mismatches.push({ kind, M, N: 100, count, x, fx, xDisp, disp1, disp2 });
+            }
+          }
+        }
+      }
+
+      // Additional N sweep across representative counts (including jump & boundary cases)
+      const repCounts = [100, 27300, 71800, 85600, 126700, 140000, 246100, 320000];
+      for (const kind of ['psi', 'psi1']) {
+        for (const N of [10, 30, 300, 1000]) {
+          for (const count of repCounts) {
+            const xs = ef.logSpacedSamples(2, count, 1600);
+            for (const idx of [Math.floor((1600 - 1) / 2), 1599]) {
+              const x = xs[idx];
+              const fx = formatHudX(x);
+              const xDisp = Number(fx.text.replace(/,/g, ''));
+              const b1 = ef.computeExplicitBaseForSamples([x], tables, kind);
+              const r1 = ef.computeExplicitRecon([x], N, ZEROS, kind, denom);
+              const res1 = ef.computeExplicitResidual(b1.meas, r1);
+              const disp1 = fmtRow(b1.meas[0], r1[0], res1[0], b1.bound[0]);
+
+              const b2 = ef.computeExplicitBaseForSamples([xDisp], tables, kind);
+              const r2 = ef.computeExplicitRecon([xDisp], N, ZEROS, kind, denom);
+              const res2 = ef.computeExplicitResidual(b2.meas, r2);
+              const disp2 = fmtRow(b2.meas[0], r2[0], res2[0], b2.bound[0]);
+
+              checked++;
+              if (xDisp !== x || fx.op !== '=' || disp1.join('|') !== disp2.join('|')) {
+                mismatches.push({ kind, M: 1600, N, count, x, fx, xDisp, disp1, disp2 });
+              }
+            }
+          }
+        }
+      }
+
+      const valueMismatches = mismatches.filter(m => m.disp1.join('|') !== m.disp2.join('|'));
+      return {
+        checked,
+        mismatchCount: mismatches.length,
+        valueMismatchCount: valueMismatches.length,
+        valueSample: valueMismatches.slice(0, 5),
+        sample: mismatches.slice(0, 5),
+      };
+    });
+
+    expect(result.checked).toBe(12800 + 128);
+    expect(result.valueMismatchCount, JSON.stringify(result.valueSample)).toBe(0);
+    expect(result.mismatchCount, JSON.stringify(result.sample)).toBe(0);
+    expect(errors).toEqual([]);
   });
 });

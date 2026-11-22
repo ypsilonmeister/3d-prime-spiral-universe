@@ -81,7 +81,10 @@ export const state = {
 
     // Explicit formula mode (owner)
     explicitModeActive: false,
-    explicitInfo: null, // read-only snapshot of the latest computation (M, N, rms, shell ring xs, fallback flag)
+    explicitKind: 'psi1', // 'psi1' (default) | 'psi'
+    explicitView: 'a',    // 'a' (measured + recon + shell) | 'b' (residual ribbon only; shell hidden)
+    explicitShowPrimes: true, // prime markers on the reference axis C(u) (default: shown)
+    explicitInfo: null, // read-only snapshot of the latest computation (M, N, kind, view, rms, hud, shell ring xs, primeCount, primesVisible, fallback flag)
 
     // Math buffers loaded from worker
     isPrimeArray: new Uint8Array(320000 + 1),

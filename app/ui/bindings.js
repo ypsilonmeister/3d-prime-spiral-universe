@@ -135,6 +135,35 @@ export function bindUIEvents(enterVRCallback) {
         });
     }
 
+    const explicitKindPsi1 = getElement('explicit-kind-psi1');
+    if (explicitKindPsi1) {
+        explicitKindPsi1.addEventListener('click', () => explicitMode.setKind('psi1'));
+    }
+    const explicitKindPsi = getElement('explicit-kind-psi');
+    if (explicitKindPsi) {
+        explicitKindPsi.addEventListener('click', () => explicitMode.setKind('psi'));
+    }
+    const explicitViewA = getElement('explicit-view-a');
+    if (explicitViewA) {
+        explicitViewA.addEventListener('click', () => explicitMode.setView('a'));
+    }
+    const explicitViewB = getElement('explicit-view-b');
+    if (explicitViewB) {
+        explicitViewB.addEventListener('click', () => explicitMode.setView('b'));
+    }
+    const swExplicitPrimes = getElement('sw-explicit-primes');
+    if (swExplicitPrimes) {
+        swExplicitPrimes.parentElement.addEventListener('click', () => {
+            explicitMode.setShowPrimes(!state.explicitShowPrimes);
+        });
+        swExplicitPrimes.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                explicitMode.setShowPrimes(!state.explicitShowPrimes);
+            }
+        });
+    }
+
     // queuedInExplicit: the request was queued while the explicit mode owned N; if the mode was left
     // before the frame ran, drop it (exit() already handed N back and resynced the Zeta Wave).
     const recomputeZeta = rafThrottle((queuedInExplicit) => {

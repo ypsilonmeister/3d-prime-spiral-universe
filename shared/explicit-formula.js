@@ -99,20 +99,28 @@ export function zeroSumPsiRaw(lnArr, sqrtArr, zeros, denom, N) {
     return S;
 }
 
+export const LN2PI = Math.log(2 * Math.PI);
+
+// psi0 fluctuation from the accumulated positive partial zero sum S:
+//   psi0_N(x) - x = -2 * S - ln(2pi) - (1/2) ln(1 - x^-2)
+export function psiFluctFromZeroSum(x, S) {
+    return -2 * S - LN2PI - 0.5 * Math.log(1 - 1 / (x * x));
+}
+
 // Single-point explicit psi0 reconstruction with the first N zeros (verification script).
-// The zero sum goes through accumulateZeroSumPsi (same code path as the worker / fallback).
+// The zero sum goes through accumulateZeroSumPsi (same code path as the worker / fallback)
+// and the correction terms go through psiFluctFromZeroSum (shared with computeExplicitRecon).
 // denom (optional): buildZetaDenom(zeros) built once by the caller for a fixed zero set. It must correspond
 // to the current values of zeros; when omitted it is computed from the current first N zeros on every call
 // (no cache keyed on the array, so mutating zeros is always honoured).
 export function explicitPsi(x, N, zeros, denom) {
     if (!denom) denom = buildZetaDenom(Array.prototype.slice.call(zeros, 0, N));
     const S = accumulateZeroSumPsi(new Float64Array(1), [Math.log(x)], [Math.sqrt(x)], zeros, denom, 0, N);
-    return x - 2 * S[0] - LN2PI - 0.5 * Math.log(1 - 1 / (x * x));
+    return x + psiFluctFromZeroSum(x, S[0]);
 }
 
 // psi1 explicit formula with the first N zeros:
 // x^(rho+1)/(rho(rho+1)), rho(rho+1) = (3/4 - g^2) + 2ig.
-export const LN2PI = Math.log(2 * Math.PI);
 export const ZP_M1 = 1.98505372440541115; // zeta'/zeta(-1)
 export function explicitPsi1(x, N, zeros) {
     const L = Math.log(x), x15 = x * Math.sqrt(x);
@@ -229,10 +237,7 @@ export function computeExplicitRecon(xs, N, zeros, kind = EXPLICIT_KIND_DEFAULT,
         for (let i = 0; i < M; i++) { lnArr[i] = Math.log(xs[i]); sqrtArr[i] = Math.sqrt(xs[i]); }
         const d = denom || buildZetaDenom(zeros);
         const S = accumulateZeroSumPsi(new Float64Array(M), lnArr, sqrtArr, zeros, d, 0, N);
-        for (let i = 0; i < M; i++) {
-            const x = xs[i];
-            out[i] = -2 * S[i] - LN2PI - 0.5 * Math.log(1 - 1 / (x * x));
-        }
+        for (let i = 0; i < M; i++) out[i] = psiFluctFromZeroSum(xs[i], S[i]);
         return out;
     }
     for (let i = 0; i < M; i++) out[i] = explicitPsi1(xs[i], N, zeros) - xs[i] * xs[i] / 2;

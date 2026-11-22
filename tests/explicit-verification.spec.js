@@ -9,6 +9,7 @@ import {
     buildPsiTables, buildZetaDenom, logSpacedSamples,
     computeExplicitBase, computeExplicitBaseForSamples,
     computeExplicitRecon, computeExplicitResidual, computeExplicitHud,
+    explicitPsi, psiFluctFromZeroSum, LN2PI,
     rmsDiff, compressedOffset, compressionRef,
     ASINH_SCALE_PSI1, ASINH_SCALE_PSI, SCHOENFELD_X0,
 } from '../shared/explicit-formula.js';
@@ -150,6 +151,23 @@ test.describe('explicit-formula canonical verification (docs/explicit-formula-ve
             for (const s of hud.samples) {
                 expect(s.residual).toBe(s.measured - s.recon);
                 expect(Number.isFinite(s.bound)).toBe(true);
+            }
+        }
+    });
+
+    test('explicitPsi and computeExplicitRecon("psi") share psiFluctFromZeroSum correction terms', () => {
+        for (const [x, S] of [[2, 0.1], [73.2, -1.25], [233, 3.5], [320000, -42.1]]) {
+            const expected = -2 * S - LN2PI - 0.5 * Math.log(1 - 1 / (x * x));
+            expect(psiFluctFromZeroSum(x, S)).toBe(expected);
+        }
+
+        for (const N of [10, 100, 1000]) {
+            const batch = computeExplicitRecon(GRID, N, ZEROS, 'psi', denom);
+            for (let i = 0; i < GRID.length; i++) {
+                const x = GRID[i];
+                const single = computeExplicitRecon([x], N, ZEROS, 'psi', denom)[0];
+                expect(batch[i]).toBe(single);
+                expect(explicitPsi(x, N, ZEROS, denom)).toBe(x + single);
             }
         }
     });

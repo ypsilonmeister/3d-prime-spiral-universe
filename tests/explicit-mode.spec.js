@@ -853,4 +853,170 @@ test.describe('explicit formula mode', () => {
     expect(r.vertexCount).toBe(r.expected);
     expect(errors.filter(e => !e.startsWith('Worker init failed'))).toEqual([]);
   });
+
+  // ---- review #305 regressions -------------------------------------------
+
+  test('View A -> View B recomputes ribbon boundingSphere so close-up frustum does not cull farthest vertex', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.N === 100 && i.view === 'a');
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const checkCloseUp = () => page.evaluate(async () => {
+      const THREE = await import('three');
+      const s = window.__APP_STATE__;
+      const ribbon = s.scene.getObjectByName('explicit-ribbon');
+      const bs = ribbon.geometry.boundingSphere;
+      const pos = ribbon.geometry.attributes.position;
+      let maxDist = -1;
+      const far = new THREE.Vector3();
+      const v = new THREE.Vector3();
+      for (let i = 0; i < pos.count; i++) {
+        v.fromBufferAttribute(pos, i);
+        const d = v.distanceTo(bs.center);
+        if (d > maxDist) { maxDist = d; far.copy(v); }
+      }
+      const cam = s.camera.clone();
+      const dirToCenter = bs.center.clone().sub(far).normalize();
+      cam.position.copy(far).addScaledVector(dirToCenter, 5);
+      cam.lookAt(far);
+      cam.updateMatrixWorld(true);
+      cam.updateProjectionMatrix();
+      const frustum = new THREE.Frustum().setFromProjectionMatrix(
+        new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse)
+      );
+      const intersects = frustum.intersectsObject(ribbon);
+
+      let renderCalls = 0;
+      const prevOnBeforeRender = ribbon.onBeforeRender;
+      ribbon.onBeforeRender = function (...args) {
+        renderCalls++;
+        return prevOnBeforeRender.apply(this, args);
+      };
+      try {
+        s.renderer.render(s.scene, cam);
+      } finally {
+        ribbon.onBeforeRender = prevOnBeforeRender;
+      }
+
+      return {
+        hasSphere: !!bs,
+        radius: bs.radius,
+        maxDist,
+        intersects,
+        renderCalls,
+        glError: s.renderer.getContext().getError(),
+      };
+    });
+
+    await page.locator('#explicit-view-b').click();
+    await expect(page.locator('#explicit-view-b')).toHaveAttribute('aria-pressed', 'true');
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const afterB = await checkCloseUp();
+    expect(afterB.hasSphere).toBe(true);
+    expect(afterB.radius).toBeGreaterThanOrEqual(afterB.maxDist - 1e-3);
+    expect(afterB.intersects).toBe(true);
+    expect(afterB.renderCalls).toBe(1);
+    expect(afterB.glError).toBe(0);
+
+    // Changing N in View B also updates vertices in-place and must keep boundingSphere valid
+    await setN(page, 10);
+    await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const afterN = await checkCloseUp();
+    expect(afterN.radius).toBeGreaterThanOrEqual(afterN.maxDist - 1e-3);
+    expect(afterN.intersects).toBe(true);
+    expect(afterN.renderCalls).toBe(1);
+    expect(afterN.glError).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  test('HUD displayed x matches shared functions at display precision across psi jump discontinuity (count=27,300)', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.N === 100);
+
+    await page.locator('#explicit-kind-psi').click();
+    await waitExplicitReady(page, i => i.kind === 'psi' && i.N === 100);
+
+    await page.locator('#count-slider').evaluate(el => {
+      el.value = '27300';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await waitExplicitReady(page, i => i.kind === 'psi' && i.N === 100 && i.xMax === 27300);
+
+    const check = await page.evaluate(async () => {
+      const ef = await import('/shared/explicit-formula.js');
+      const { buildSieve } = await import('/shared/sieve.js');
+      const { ZETA_ZEROS_1000 } = await import('/shared/zeta-zeros-1000.js');
+      const formatHudNumber = v => {
+        if (!Number.isFinite(v)) return '—';
+        const abs = Math.abs(v);
+        if (abs >= 1e6 || (abs > 0 && abs < 1e-2)) return v.toExponential(3);
+        return v.toFixed(2);
+      };
+      const tables = ef.buildPsiTables(27300, buildSieve(27300).spf);
+      const hudEl = document.getElementById('explicit-hud');
+      const samples = Array.from(hudEl.querySelectorAll('.explicit-hud-sample')).map(el => {
+        const label = el.getAttribute('data-sample');
+        const xLine = el.querySelector('.explicit-hud-x').textContent;
+        const m = xLine.match(/x\s*([=≈])\s*([0-9,]+(?:\.[0-9]+)?)/);
+        const op = m ? m[1] : null;
+        const xDisp = m ? Number(m[2].replace(/,/g, '')) : NaN;
+        const displayedVals = Array.from(el.querySelectorAll('.explicit-hud-val')).map(v => v.textContent);
+        const base = ef.computeExplicitBaseForSamples([xDisp], tables, 'psi');
+        const recon = ef.computeExplicitRecon([xDisp], 100, ZETA_ZEROS_1000, 'psi');
+        const residual = ef.computeExplicitResidual(base.meas, recon);
+        const expectedVals = [
+          formatHudNumber(base.meas[0]),
+          formatHudNumber(recon[0]),
+          formatHudNumber(residual[0]),
+          formatHudNumber(base.bound[0]),
+        ];
+        return { label, xLine, op, xDisp, displayedVals, expectedVals };
+      });
+      return {
+        internalMidX: window.__APP_STATE__.explicitInfo.hud.samples[0].x,
+        samples,
+      };
+    });
+
+    const mid = check.samples.find(s => s.label === 'mid');
+    const max = check.samples.find(s => s.label === 'max');
+    expect(mid.op).toBe('≈');
+    expect(Math.floor(mid.xDisp)).toBe(232);
+    expect(Math.abs(mid.xDisp - check.internalMidX)).toBeLessThan(1e-5);
+    expect(mid.displayedVals).toEqual(mid.expectedVals);
+
+    expect(max.op).toBe('=');
+    expect(max.xDisp).toBe(27300);
+    expect(max.displayedVals).toEqual(max.expectedVals);
+    expect(errors).toEqual([]);
+  });
+
+  test('prime markers switch exposes accessible name via aria-labelledby and toggles via keyboard', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.N != null);
+
+    const sw = page.getByRole('switch', { name: '素数マーカー' });
+    await expect(sw).toHaveCount(1);
+    await expect(sw).toBeVisible();
+    await expect(sw).toHaveAttribute('id', 'sw-explicit-primes');
+    await expect(sw).toHaveAttribute('aria-checked', 'true');
+    await expect(sw).toMatchAriaSnapshot('- switch "素数マーカー" [checked]');
+
+    await sw.focus();
+    await page.keyboard.press('Space');
+    await expect(sw).toHaveAttribute('aria-checked', 'false');
+    await expect(sw).toMatchAriaSnapshot('- switch "素数マーカー"');
+
+    await page.keyboard.press('Enter');
+    await expect(sw).toHaveAttribute('aria-checked', 'true');
+    await expect(sw).toMatchAriaSnapshot('- switch "素数マーカー" [checked]');
+    expect(errors).toEqual([]);
+  });
 });

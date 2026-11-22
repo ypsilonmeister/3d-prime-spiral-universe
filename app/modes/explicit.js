@@ -149,10 +149,23 @@ function formatHudNumber(v) {
 }
 
 function formatHudX(x) {
-    if (!Number.isFinite(x)) return '—';
-    return Math.abs(x - Math.round(x)) < 1e-6
-        ? Math.round(x).toLocaleString('en-US')
-        : x.toLocaleString('en-US', { maximumFractionDigits: 1 });
+    if (!Number.isFinite(x)) return { op: '=', text: '—' };
+    if (Number.isInteger(x)) return { op: '=', text: x.toLocaleString('en-US') };
+    // Use enough fractional digits that rounding never crosses an integer boundary
+    // (where psi(x) has jump discontinuities at prime powers), and mark rounded values with ≈.
+    const fl = Math.floor(x);
+    for (let digits = 6; digits <= 12; digits++) {
+        const s = x.toFixed(digits);
+        const parsed = Number(s);
+        if (Math.floor(parsed) === fl) {
+            const trimmed = s.replace(/\.?0+$/, '');
+            const [intPart, fracPart] = trimmed.split('.');
+            const intFmt = Number(intPart).toLocaleString('en-US');
+            const text = fracPart ? `${intFmt}.${fracPart}` : intFmt;
+            return { op: parsed === x ? '=' : '≈', text };
+        }
+    }
+    return { op: '=', text: String(x) };
 }
 
 function setSegButton(id, active) {
@@ -252,7 +265,8 @@ function renderExplicitPanel() {
         const rowsHtml = rows.map(([k, text, raw, primary]) =>
             `<div class="explicit-hud-row${primary ? ' primary' : ''}"><span>${k}</span><span class="explicit-hud-val" data-raw="${Number.isFinite(raw) ? raw : 'NaN'}">${text}</span></div>`
         ).join('');
-        return `<div class="explicit-hud-sample" data-sample="${s.label}"><div class="explicit-hud-x">${tag}: x = ${formatHudX(s.x)}</div>${rowsHtml}</div>`;
+        const fx = formatHudX(s.x);
+        return `<div class="explicit-hud-sample" data-sample="${s.label}"><div class="explicit-hud-x" data-raw-x="${s.x}">${tag}: x ${fx.op} ${fx.text}</div>${rowsHtml}</div>`;
     }).join('');
 
     hudEl.innerHTML =
@@ -419,12 +433,15 @@ function updateRibbon(recon, residual) {
         g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
         g.setAttribute('color', new THREE.BufferAttribute(col, 3));
         g.setIndex(idx);
+        g.computeBoundingSphere();
         const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
         mesh.name = 'explicit-ribbon';
         group.add(mesh);
     } else {
         geom.geometry.attributes.position.needsUpdate = true;
         geom.geometry.attributes.color.needsUpdate = true;
+        geom.geometry.computeBoundingSphere();
+        if (geom.geometry.boundingBox) geom.geometry.computeBoundingBox();
     }
 }
 

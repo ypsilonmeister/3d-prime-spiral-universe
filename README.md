@@ -6,7 +6,23 @@ An interactive 3D WebGL visualization exploring the distribution of prime number
 
 32万個の整数を3次元空間に配置し、素数の織りなす幾何学的な構造を探索できるビジュアライザーです。本プロジェクトは、**Gemini** と **Claude** という二つのAI知能の共作によって誕生しました。
 
-![3D Prime Spiral](https://via.placeholder.com/800x450?text=3D+Prime+Spiral+Universe)
+![3D Prime Spiral Universe — Main Spiral](docs/images/main-spiral.webp)
+
+*Default 3D Prime Spiral (`Cubic` / `Sphere`, 320,000 integers, `Spectrum`). / メインの3D素数スパイラル（Cubic / Sphere、32万点、Spectrum）。*
+
+## Screenshots | スクリーンショット
+
+### Zeta Wave Mode
+Riemann Zeta zeros superposed as standing waves along the Z-axis (`Amplitude: 5.0`, `Linear` sheet). / リーマンゼータ関数の非自明零点をZ軸方向の定在波として重ね合わせた表示。
+
+| Standing Wave (`N = 2`) | Zero-Sum Sweep (`N = 0 → 60`) |
+| :---: | :---: |
+| ![Zeta Wave Mode](docs/images/zeta-wave.webp) | ![Zeta Wave Animation](docs/images/zeta-wave.gif) |
+
+### Explicit Formula Mode
+Measured $\psi_1(x) - x^2/2$ (cyan), reconstruction from the first $N=100$ zeta zeros (amber ribbon), prime markers, and the RH-assumed Schoenfeld error shell $\pm B_1(x)$ ($x \ge 73.2$, violet) with live numeric HUD. / 実測のゆらぎ $\psi_1(x) - x^2/2$（シアン）、先頭 $N=100$ 個の零点による再構成（オレンジ帯）、素数マーカー、RH仮定下の誤差上限殻 $\pm B_1(x)$（紫）と数値HUD。
+
+![Explicit Formula Mode](docs/images/explicit-formula.webp)
 
 ## Features | 主な機能
 

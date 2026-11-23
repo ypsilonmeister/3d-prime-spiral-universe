@@ -66,6 +66,7 @@ const BUTTON_LABELS = {
 };
 
 let applyStepCallback = null;
+let stopCallback = null;
 let sweepToken = 0;
 let timerId = null;
 
@@ -100,6 +101,10 @@ export function setExplicitSweepApplyCallback(fn) {
     applyStepCallback = typeof fn === 'function' ? fn : null;
 }
 
+export function setExplicitSweepStopCallback(fn) {
+    stopCallback = typeof fn === 'function' ? fn : null;
+}
+
 function setSweepState(nextState) {
     state.explicitSweepState = nextState;
     state.explicitSweeping = nextState === 'running';
@@ -110,6 +115,7 @@ export function stopExplicitSweep() {
     sweepToken++;
     clearSweepTimer();
     setSweepState('idle');
+    if (stopCallback) stopCallback();
 }
 
 export function pauseExplicitSweep() {

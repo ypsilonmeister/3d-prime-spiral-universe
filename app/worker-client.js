@@ -11,7 +11,7 @@ let _zetaOnPartialLast = null; // callback for zeta_partial updates of the lates
 let _zetaShownN = null;        // zeros currently applied from zeta_partial for the active request
 let _onZetaProgress = null;    // UI callback for stage:'zeta' progress updates
 let _explicitReqId = 0;
-const _explicitPending = new Map(); // reqId -> { resolve, reject }
+const _explicitPending = new Map(); // reqId -> { type, resolve, reject }
 const _failureListeners = [];
 
 // Called (once per failure) after the worker died post-startup and its in-flight work was dropped.
@@ -216,6 +216,7 @@ export function requestExplicit(msg) {
             handleWorkerError(new Error('worker request timed out'), () => {});
         }, ms);
         _explicitPending.set(id, {
+            type: msg.type,
             resolve: v => { clearTimeout(timer); resolve(v); },
             reject: e => { clearTimeout(timer); reject(e); },
         });
@@ -226,4 +227,14 @@ export function requestExplicit(msg) {
 export function cancelExplicitRequests() {
     for (const p of _explicitPending.values()) p.resolve(null);
     _explicitPending.clear();
+}
+
+// Cancel only in-flight explicit_recon requests (leaving any explicit_base build intact).
+export function cancelExplicitReconRequests() {
+    for (const [id, p] of _explicitPending.entries()) {
+        if (p.type === 'explicit_recon') {
+            _explicitPending.delete(id);
+            p.resolve(null);
+        }
+    }
 }

@@ -15,12 +15,13 @@ import {
     computeExplicitResidual, computeExplicitHud, compressedOffset, compressionRef,
     explicitScaleParams, SCHOENFELD_X0,
 } from '../../shared/explicit-formula.js';
-import { isWorkerReady, requestExplicit, cancelExplicitRequests, cancelPendingZetaRequests, onWorkerFailure } from '../worker-client.js';
+import { isWorkerReady, requestExplicit, cancelExplicitRequests, cancelExplicitReconRequests, cancelPendingZetaRequests, onWorkerFailure } from '../worker-client.js';
 import { DEFAULT_PAGE_TITLE, RH_PAGE_TITLE, buildCleanExitUrl } from '../launch-options.js';
 import { computeZetaOffsets } from './zeta.js';
 import { stopZetaAnimation, runZetaAnimation, zetaAnimTarget, zetaAnimN } from './zeta-anim.js';
 import {
     setExplicitSweepApplyCallback,
+    setExplicitSweepStopCallback,
     armExplicitSweep,
     beginArmedExplicitSweep,
     stopExplicitSweep,
@@ -41,6 +42,7 @@ const PRIME_MARKER_OPACITY = 0.85;
 
 let group = null;
 let token = 0;            // bumps on every full rebuild / exit; stale async results are dropped
+let reconToken = 0;       // bumps on every recon request / sweep stop / rebuild / exit; drops stale recon replies even for the same N
 let cache = null;         // { xMax, M, kind, fallback, xs, meas, bound, head, boundAtX0, frames, dMeas, yRef, shell, recon, residual, N }
 let reconSeq = 0;
 let prevPointsVisible = true;
@@ -456,8 +458,13 @@ function updateRibbon(recon, residual) {
 
 // ---- computation orchestration -------------------------------------------
 
-function applyRecon(recon, N, myToken) {
-    if (myToken !== token || !group || !cache) return;
+function invalidateRecon() {
+    reconToken++;
+    cancelExplicitReconRequests();
+}
+
+function applyRecon(recon, N, myToken, myReconToken) {
+    if (myToken !== token || myReconToken !== reconToken || !group || !cache) return;
     const residual = computeExplicitResidual(cache.meas, recon);
     cache.recon = recon;
     cache.residual = residual;
@@ -475,6 +482,8 @@ function applyRecon(recon, N, myToken) {
 async function computeRecon(N, myToken) {
     const c = cache;
     if (!c) return;
+    const myReconToken = ++reconToken;
+    cancelExplicitReconRequests();
     publish({ pending: true });
     let recon;
     if (c.fallback) {
@@ -489,15 +498,16 @@ async function computeRecon(N, myToken) {
         if (!m) return;                       // superseded
         recon = m.recon;
     }
-    // A newer rebuild or N may have been requested meanwhile; only the latest is applied.
-    if (myToken !== token || N !== currentN()) return;
-    applyRecon(recon, N, myToken);
+    // A newer rebuild, recon request, sweep stop, or N may have occurred meanwhile; only the latest is applied.
+    if (myToken !== token || myReconToken !== reconToken || N !== currentN()) return;
+    applyRecon(recon, N, myToken, myReconToken);
 }
 
 function currentN() { return Math.max(0, Math.min(state.zetaZeroCount | 0, ZETA_ZEROS.length)); }
 
 async function fullRebuild() {
     const myToken = ++token;
+    reconToken++;
     cancelExplicitRequests();
     cache = null;
     if (group) disposeGroup();
@@ -560,6 +570,7 @@ async function applySweepStepN(n) {
 }
 
 setExplicitSweepApplyCallback(applySweepStepN);
+setExplicitSweepStopCallback(invalidateRecon);
 
 function syncNControl() {
     if (typeof document === 'undefined') return;

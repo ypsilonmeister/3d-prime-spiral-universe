@@ -435,6 +435,135 @@ test.describe('Explicit Formula Mode N-sweep animation (PR 2)', () => {
     expect(settled).toEqual({ sweeping: false, N: 42, zetaN: 42 });
   });
 
+  test('delayed pre-intervention Worker reply is discarded after slider stops sweep and returns to same N', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = [];
+    page.on('pageerror', err => errors.push(err.message));
+
+    await page.addInitScript(() => {
+      const OrigWorker = window.Worker;
+      window.__heldSweepReqId = null;
+      window.__heldSweepEvent = null;
+      window.__heldSweepDeliver = null;
+      window.__releaseHeldSweepReply = () => {
+        if (window.__heldSweepDeliver && window.__heldSweepEvent) {
+          const fn = window.__heldSweepDeliver;
+          const ev = window.__heldSweepEvent;
+          window.__heldSweepDeliver = null;
+          window.__heldSweepEvent = null;
+          fn(ev);
+          return true;
+        }
+        return false;
+      };
+      window.Worker = class extends OrigWorker {
+        postMessage(msg, ...rest) {
+          if (msg && msg.type === 'explicit_recon' && msg.N === 1 && window.__heldSweepReqId === null) {
+            window.__heldSweepReqId = msg.reqId;
+          }
+          return super.postMessage(msg, ...rest);
+        }
+        set onmessage(handler) {
+          if (typeof handler !== 'function') {
+            super.onmessage = handler;
+            return;
+          }
+          super.onmessage = (ev) => {
+            const m = ev && ev.data;
+            if (
+              m &&
+              m.type === 'explicit_done' &&
+              window.__heldSweepReqId !== null &&
+              m.reqId === window.__heldSweepReqId &&
+              window.__heldSweepEvent === null
+            ) {
+              window.__heldSweepEvent = ev;
+              window.__heldSweepDeliver = handler.bind(this);
+              return;
+            }
+            return handler.call(this, ev);
+          };
+        }
+        get onmessage() {
+          return super.onmessage;
+        }
+      };
+    });
+
+    await page.goto('/?mode=explicit', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+
+    // Wait until auto-sweep finishes N=0 and its N=1 worker reply is captured and held
+    await expect.poll(
+      async () => page.evaluate(() => window.__heldSweepEvent !== null),
+      { timeout: 15_000, message: 'Auto-sweep N=1 worker reply should be captured and held' },
+    ).toBe(true);
+
+    const beforeIntervention = await page.evaluate(() => ({
+      N: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N,
+      reconSeq: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.reconSeq,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+    }));
+    expect(beforeIntervention).toEqual({ N: 0, reconSeq: 1, sweepState: 'running' });
+
+    // Intervene with slider: move to N=2 and wait for manual reconstruction to settle
+    await page.locator('#zeta-n-slider').evaluate((el) => {
+      el.value = '2';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await expect.poll(
+      async () => page.evaluate(() => {
+        const i = window.__APP_STATE__.explicitInfo;
+        return i && !i.pending ? i.N : null;
+      }),
+      { timeout: 15_000, message: 'Manual N=2 reconstruction should settle' },
+    ).toBe(2);
+
+    // Move slider back to N=1 and wait for manual reconstruction to settle
+    await page.locator('#zeta-n-slider').evaluate((el) => {
+      el.value = '1';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await expect.poll(
+      async () => page.evaluate(() => {
+        const i = window.__APP_STATE__.explicitInfo;
+        return i && !i.pending ? i.N : null;
+      }),
+      { timeout: 15_000, message: 'Manual N=1 reconstruction should settle' },
+    ).toBe(1);
+
+    const beforeRelease = await page.evaluate(() => ({
+      N: window.__APP_STATE__.explicitInfo.N,
+      reconSeq: window.__APP_STATE__.explicitInfo.reconSeq,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      zetaN: window.__APP_STATE__.zetaZeroCount,
+    }));
+    expect(beforeRelease).toEqual({
+      N: 1,
+      reconSeq: 3,
+      sweepState: 'idle',
+      sweeping: false,
+      zetaN: 1,
+    });
+
+    // Deliver the stale pre-intervention Worker reply for N=1
+    const released = await page.evaluate(() => window.__releaseHeldSweepReply());
+    expect(released).toBe(true);
+    await page.waitForTimeout(300);
+
+    const afterRelease = await page.evaluate(() => ({
+      N: window.__APP_STATE__.explicitInfo.N,
+      reconSeq: window.__APP_STATE__.explicitInfo.reconSeq,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      zetaN: window.__APP_STATE__.zetaZeroCount,
+    }));
+    // Stale reply must be discarded: reconSeq must NOT increment (no redundant overwrite)
+    expect(afterRelease).toEqual(beforeRelease);
+    expect(errors).toEqual([]);
+  });
+
   test('View B keeps sweep running, pause/resume works, and Kind switch stops sweep', async ({ page }) => {
     test.setTimeout(120_000);
     await page.goto('/?mode=explicit', { waitUntil: 'domcontentloaded' });

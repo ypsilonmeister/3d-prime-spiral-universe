@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { state } from '../state.js';
 import { updateParticleVisuals, isCompositeVisible, clearAboveActive } from '../render/particles.js';
+import { cancelPendingZetaRequests } from '../worker-client.js';
 
 export function computePrimeDimValuations() {
     const [px, py, pz] = state.primeDimP;
@@ -170,6 +171,7 @@ export const primeDimMode = {
     kind: 'owner',
     enter() {
         state.primeDimModeActive = true;
+        cancelPendingZetaRequests();
         computePrimeDimValuations();
         applyPrimeDimPositions();
         buildPrimeDimAxisObjects();

@@ -15,7 +15,7 @@ import {
     computeExplicitResidual, computeExplicitHud, compressedOffset, compressionRef,
     explicitScaleParams, SCHOENFELD_X0,
 } from '../../shared/explicit-formula.js';
-import { isWorkerReady, requestExplicit, cancelExplicitRequests, onWorkerFailure } from '../worker-client.js';
+import { isWorkerReady, requestExplicit, cancelExplicitRequests, cancelPendingZetaRequests, onWorkerFailure } from '../worker-client.js';
 import { computeZetaOffsets } from './zeta.js';
 import { stopZetaAnimation, runZetaAnimation, zetaAnimTarget, zetaAnimN } from './zeta-anim.js';
 
@@ -567,6 +567,9 @@ export const explicitMode = {
     enter() {
         state.explicitModeActive = true;
         savedZetaN = state.zetaZeroCount;
+        // Cancel any in-flight Zeta worker computation so explicit_base/recon are not blocked
+        // behind a long Zeta run (which could otherwise hit EXPLICIT_TIMEOUT_MS and terminate the worker).
+        cancelPendingZetaRequests();
         // Pause the Zeta Wave's own N-driven work (animation); its recompute is gated in computeZetaOffsets.
         savedAnim = null;
         if (state.zetaAnimating) {

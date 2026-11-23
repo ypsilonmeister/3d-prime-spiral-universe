@@ -6,7 +6,7 @@ import { requestZetaOffsets, cancelPendingZetaRequests, isWorkerReady } from '..
 import { buildZetaDenom, buildLnSqrtCaches, accumulateZeroSumPsi, maxAbs, zetaNormScale, scaleInto } from '../../shared/explicit-formula.js';
 import { applyPositionOverlays } from '../render/lattice.js';
 
-let _zetaSyncCaches = null; // { ln, sq, denom, N, raw (Float32), maxAbs }
+let _zetaSyncCaches = null; // { ln, sq, denom, N, S (Float64), raw (Float32), maxAbs }
 
 // The fallback runs on the main thread (worker unavailable), so cap the effective N
 // to keep the UI responsive: N=1000 over MAX_POINTS blocked ~10s, N=100 about a tenth of that.
@@ -14,22 +14,25 @@ const ZETA_SYNC_FALLBACK_MAX_N = 100;
 
 function _computeZetaSyncFallback(N) {
     // also never read past the zero table (would yield NaN)
-    N = Math.min(N, ZETA_SYNC_FALLBACK_MAX_N, ZETA_ZEROS.length);
+    N = Math.max(0, Math.min(Math.floor(N) || 0, ZETA_SYNC_FALLBACK_MAX_N, ZETA_ZEROS.length));
     const M = state.MAX_POINTS;
     if (!_zetaSyncCaches) {
         const { ln, sq } = buildLnSqrtCaches(M);
-        _zetaSyncCaches = { ln, sq, denom: buildZetaDenom(ZETA_ZEROS), N: -1, raw: null, maxAbs: 0 };
+        _zetaSyncCaches = { ln, sq, denom: buildZetaDenom(ZETA_ZEROS), N: -1, S: null, raw: null, maxAbs: 0 };
     }
     const c = _zetaSyncCaches;
     // Same policy as worker.js: the zero sum depends only on the effective N; amplitude/spacing
-    // only redo the normalization. raw is kept Float32 so max|raw| matches the worker's.
+    // only redo the normalization. N growing continues from the cached partial sum S; N shrinking
+    // recomputes from 0. raw is kept Float32 so max|raw| matches the worker's.
     if (c.N !== N) {
-        const S = new Float64Array(M);
-        accumulateZeroSumPsi(S, c.ln, c.sq, ZETA_ZEROS, c.denom, 0, N);
+        const resume = c.S && c.N >= 0 && c.N < N;
+        const S = resume ? c.S : new Float64Array(M);
+        accumulateZeroSumPsi(S, c.ln, c.sq, ZETA_ZEROS, c.denom, resume ? c.N : 0, N);
         const raw = new Float32Array(M);
         for (let i = 0; i < M; i++) raw[i] = -2.0 * S[i];
-        c.N = N; c.raw = raw; c.maxAbs = maxAbs(raw);
+        c.N = N; c.S = S; c.raw = raw; c.maxAbs = maxAbs(raw);
     }
+    state.zetaComputedN = N;
     state.zetaOffsetsRaw.set(c.raw);
     scaleInto(state.zetaOffsets, c.raw, zetaNormScale(c.maxAbs, state.currentSpacing, state.zetaAmplitude));
 }
@@ -67,6 +70,7 @@ export function computeZetaOffsets(N) {
     N = Math.min(N, state.zetaZeroCount);
     if (!state.zetaModeActive || N === 0) {
         cancelPendingZetaRequests();
+        state.zetaComputedN = 0;
         state.zetaOffsets.fill(0);
         state.zetaOffsetsRaw.fill(0);
         applyPositionOverlays();
@@ -105,6 +109,7 @@ export const zetaMode = {
             }
         }
         cancelPendingZetaRequests();
+        state.zetaComputedN = 0;
         state.zetaOffsets.fill(0);
         state.zetaOffsetsRaw.fill(0);
         applyPositionOverlays();

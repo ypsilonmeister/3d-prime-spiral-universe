@@ -6,16 +6,31 @@ import { dirname, join } from 'node:path';
 
 const [maxPoints, amplitude, spacing, xs, Ns] = process.argv.slice(2);
 const sent = [];
-globalThis.self = { postMessage: (m) => sent.push(m) };
+let pendingDone = null;
+globalThis.self = {
+    postMessage: (m) => {
+        sent.push(m);
+        if (m.type === 'zeta_done' && pendingDone) {
+            const resolve = pendingDone;
+            pendingDone = null;
+            resolve(m);
+        }
+    },
+};
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 await import(join(root, 'worker.js'));
 self.onmessage({ data: { type: 'init', maxPoints: +maxPoints } });
 
+function requestZeta(msg) {
+    return new Promise((resolve) => {
+        pendingDone = resolve;
+        self.onmessage({ data: msg });
+    });
+}
+
 const out = [];
 for (const N of Ns.split(',').map(Number)) {
-    const before = sent.length;
-    self.onmessage({ data: { type: 'zeta', reqId: 7, N, amplitude: +amplitude, spacing: +spacing } });
-    const m = sent[before];
+    const m = await requestZeta({ type: 'zeta', reqId: 7, N, amplitude: +amplitude, spacing: +spacing });
     let maxRaw = 0, maxNorm = 0, nonzero = 0;
     for (let i = 0; i < m.offsets.length; i++) {
         maxRaw = Math.max(maxRaw, Math.abs(m.rawOffsets[i]));

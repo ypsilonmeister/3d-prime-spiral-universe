@@ -1222,53 +1222,114 @@ test.describe('explicit formula mode', () => {
 
   // ---- Issue #26: outline shell, foreground curves, residual rungs --------
 
-  test('Issue #26: measured & reconstruction curves render in front of shell/axis/rungs; residual rungs shorten as N increases (manual & sweep)', async ({ page }) => {
+  test('Issue #26: measured & reconstruction curves render in front of shell/axis; 3D cylinder rungs are visible at default view and shorten as N increases; View B matches master', async ({ page }) => {
     test.setTimeout(180_000);
     const errors = await boot(page);
     await enter(page);
     await waitExplicitReady(page, i => i.kind === 'psi1' && i.view === 'a');
 
-    // 1. Verify draw order puts measured (cyan) & ribbon (orange) in front of axis/shell/ring/primes/rungs
+    // 1. Verify draw order puts measured (cyan) & ribbon (orange) in front of axis/shell/ring/primes,
+    //    and rungs use a thin 3D InstancedMesh cylinder with distinct white-ish colour & medium opacity.
     const orderInfo = await page.evaluate(() => {
       const g = window.__APP_STATE__.scene.getObjectByName('explicit-group');
       const byName = Object.fromEntries(g.children.map(c => [c.name, {
         renderOrder: c.renderOrder,
         transparent: c.material.transparent,
+        opacity: c.material.opacity,
         depthWrite: c.material.depthWrite,
+        polygonOffset: c.material.polygonOffset,
+        polygonOffsetFactor: c.material.polygonOffsetFactor,
+        polygonOffsetUnits: c.material.polygonOffsetUnits,
         isLineSegments: c.isLineSegments === true,
         isMesh: c.isMesh === true,
+        isInstancedMesh: c.isInstancedMesh === true,
+        geomType: c.geometry ? c.geometry.type : null,
+        geomParams: c.geometry && c.geometry.parameters ? c.geometry.parameters : null,
+        color: c.material && c.material.color ? { r: c.material.color.r, g: c.material.color.g, b: c.material.color.b } : null,
       }]));
       return byName;
     });
 
     expect(orderInfo['explicit-shell'].isLineSegments).toBe(true);
     expect(orderInfo['explicit-shell'].isMesh).toBe(false);
-    expect(orderInfo['explicit-rungs'].isLineSegments).toBe(true);
-    for (const bg of ['explicit-axis', 'explicit-shell', 'explicit-boundary-ring', 'explicit-primes', 'explicit-rungs']) {
+    expect(orderInfo['explicit-rungs'].isInstancedMesh).toBe(true);
+    expect(orderInfo['explicit-rungs'].geomType).toBe('CylinderGeometry');
+    expect(orderInfo['explicit-rungs'].geomParams.radiusTop).toBeGreaterThan(0);
+    expect(orderInfo['explicit-rungs'].geomParams.radiusBottom).toBeGreaterThan(0);
+    expect(orderInfo['explicit-rungs'].color.r).toBeGreaterThan(0.85);
+    expect(orderInfo['explicit-rungs'].color.g).toBeGreaterThan(0.85);
+    expect(orderInfo['explicit-rungs'].color.b).toBeGreaterThan(0.85);
+    expect(orderInfo['explicit-rungs'].opacity).toBeGreaterThan(0.3);
+    expect(orderInfo['explicit-rungs'].opacity).toBeLessThan(0.9);
+    for (const bg of ['explicit-axis', 'explicit-shell', 'explicit-boundary-ring', 'explicit-primes']) {
       expect(orderInfo[bg].transparent).toBe(true);
       expect(orderInfo[bg].depthWrite).toBe(false);
       expect(orderInfo['explicit-ribbon'].renderOrder).toBeGreaterThan(orderInfo[bg].renderOrder);
       expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo[bg].renderOrder);
     }
+    expect(orderInfo['explicit-rungs'].transparent).toBe(true);
+    expect(orderInfo['explicit-rungs'].depthWrite).toBe(false);
     expect(orderInfo['explicit-ribbon'].transparent).toBe(true);
     expect(orderInfo['explicit-measured'].transparent).toBe(true);
     expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo['explicit-ribbon'].renderOrder);
+    expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo['explicit-rungs'].renderOrder);
 
-    // 2. Measure mean rung length across N = 10 -> 100 -> 1000
-    const measureRungs = () => page.evaluate(() => {
-      const rungs = window.__APP_STATE__.scene.getObjectByName('explicit-rungs');
-      const pos = rungs.geometry.attributes.position;
-      const count = pos.count / 2;
+    // 2. Measure rung length (from InstancedMesh matrices) and default-view pixel diff across N = 10 -> 100 -> 1000
+    const measureRungs = () => page.evaluate(async () => {
+      const THREE = await import('three');
+      const s = window.__APP_STATE__;
+      const rungs = s.scene.getObjectByName('explicit-rungs');
+      const count = rungs.count;
+      const mat4 = new THREE.Matrix4();
+      const pos = new THREE.Vector3();
+      const quat = new THREE.Quaternion();
+      const scale = new THREE.Vector3();
       let sum = 0;
       let max = 0;
       for (let k = 0; k < count; k++) {
-        const ax = pos.getX(2 * k), ay = pos.getY(2 * k), az = pos.getZ(2 * k);
-        const bx = pos.getX(2 * k + 1), by = pos.getY(2 * k + 1), bz = pos.getZ(2 * k + 1);
-        const len = Math.hypot(bx - ax, by - ay, bz - az);
+        rungs.getMatrixAt(k, mat4);
+        mat4.decompose(pos, quat, scale);
+        const len = scale.y;
         sum += len;
         if (len > max) max = len;
       }
-      return { visible: rungs.visible, count, meanLen: sum / count, maxLen: max };
+
+      // Render-toggle pixel diff at fixed default camera (same methodology as review #17)
+      const renderer = s.renderer;
+      const gl = renderer.getContext();
+      const w = gl.drawingBufferWidth;
+      const h = gl.drawingBufferHeight;
+      const readFrame = (vis) => {
+        rungs.visible = vis;
+        renderer.clear();
+        renderer.render(s.scene, s.camera);
+        const buf = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        return buf;
+      };
+      const prevVis = rungs.visible;
+      let diffPixels = 0;
+      let restoreDiff = 0;
+      if (prevVis) {
+        const on1 = readFrame(true);
+        const off = readFrame(false);
+        const on2 = readFrame(true);
+        for (let i = 0; i < on1.length; i += 4) {
+          if (on1[i] !== off[i] || on1[i + 1] !== off[i + 1] || on1[i + 2] !== off[i + 2]) diffPixels++;
+          if (on1[i] !== on2[i] || on1[i + 1] !== on2[i + 1] || on1[i + 2] !== on2[i + 2]) restoreDiff++;
+        }
+      }
+      rungs.visible = prevVis;
+      return {
+        visible: prevVis,
+        count,
+        geomUuid: rungs.geometry.uuid,
+        meanLen: sum / count,
+        maxLen: max,
+        diffPixels,
+        restoreDiff,
+        glError: gl.getError(),
+      };
     });
 
     const rungStats = {};
@@ -1277,16 +1338,22 @@ test.describe('explicit formula mode', () => {
       rungStats[n] = await measureRungs();
       expect(rungStats[n].visible).toBe(true);
       expect(rungStats[n].count).toBeGreaterThanOrEqual(50);
+      expect(rungStats[n].diffPixels, `default-view pixel diff at N=${n}`).toBeGreaterThan(0);
+      expect(rungStats[n].restoreDiff).toBe(0);
+      expect(rungStats[n].glError).toBe(0);
     }
-    console.log('Residual rung meanLen (display units):', JSON.stringify(rungStats));
+    console.log('Residual rung stats (length & default-view diffPixels):', JSON.stringify(rungStats));
+    expect(rungStats[10].geomUuid).toBe(rungStats[100].geomUuid);
+    expect(rungStats[100].geomUuid).toBe(rungStats[1000].geomUuid);
     expect(rungStats[10].meanLen).toBeGreaterThan(rungStats[100].meanLen);
     expect(rungStats[100].meanLen).toBeGreaterThan(rungStats[1000].meanLen);
     expect(rungStats[1000].meanLen).toBeGreaterThan(0);
 
-    // 3. Sweep playback also updates rungs (N=0 -> 1000) and shortens them by completion
+    // 3. Sweep playback also updates rungs in-place (N=0 -> 1000) and shortens them by completion
     await setN(page, 0);
     const atN0 = await measureRungs();
     expect(atN0.meanLen).toBeGreaterThan(rungStats[1000].meanLen);
+    expect(atN0.diffPixels).toBeGreaterThan(0);
 
     await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
     await page.locator('#explicit-sweep-btn').click();
@@ -1299,13 +1366,74 @@ test.describe('explicit formula mode', () => {
     ).toEqual({ sweepState: 'done', N: 1000 });
 
     const afterSweep = await measureRungs();
+    expect(afterSweep.geomUuid).toBe(rungStats[1000].geomUuid);
     expect(afterSweep.meanLen).toBeLessThan(atN0.meanLen);
     expect(Math.abs(afterSweep.meanLen - rungStats[1000].meanLen)).toBeLessThan(1e-6);
 
-    // 4. View B hides rungs without altering View B behavior
+    // 4. View B hides rungs and legend entry, and restores ribbon/axis/primes render settings to master
     await page.locator('#explicit-view-b').click();
-    const inViewB = await measureRungs();
-    expect(inViewB.visible).toBe(false);
+    const viewB = await page.evaluate(() => {
+      const g = window.__APP_STATE__.scene.getObjectByName('explicit-group');
+      const ribbon = g.getObjectByName('explicit-ribbon');
+      const axis = g.getObjectByName('explicit-axis');
+      const primes = g.getObjectByName('explicit-primes');
+      const rungs = g.getObjectByName('explicit-rungs');
+      const legRungs = document.getElementById('explicit-legend-rungs');
+      return {
+        rungsVisible: rungs.visible,
+        legendRungsHidden: legRungs.hidden,
+        ribbon: {
+          transparent: ribbon.material.transparent,
+          polygonOffset: ribbon.material.polygonOffset,
+          polygonOffsetFactor: ribbon.material.polygonOffsetFactor,
+          polygonOffsetUnits: ribbon.material.polygonOffsetUnits,
+          renderOrder: ribbon.renderOrder,
+        },
+        axis: {
+          depthWrite: axis.material.depthWrite,
+          renderOrder: axis.renderOrder,
+        },
+        primes: {
+          renderOrder: primes.renderOrder,
+        },
+      };
+    });
+    expect(viewB.rungsVisible).toBe(false);
+    expect(viewB.legendRungsHidden).toBe(true);
+    expect(viewB.ribbon).toEqual({
+      transparent: false,
+      polygonOffset: false,
+      polygonOffsetFactor: 0,
+      polygonOffsetUnits: 0,
+      renderOrder: 0,
+    });
+    expect(viewB.axis).toEqual({ depthWrite: true, renderOrder: 0 });
+    expect(viewB.primes).toEqual({ renderOrder: 0 });
+
+    // Returning to View A restores legend and View A render settings
+    await page.locator('#explicit-view-a').click();
+    const backToA = await page.evaluate(() => {
+      const g = window.__APP_STATE__.scene.getObjectByName('explicit-group');
+      const ribbon = g.getObjectByName('explicit-ribbon');
+      const axis = g.getObjectByName('explicit-axis');
+      const rungs = g.getObjectByName('explicit-rungs');
+      return {
+        rungsVisible: rungs.visible,
+        legendRungsHidden: document.getElementById('explicit-legend-rungs').hidden,
+        ribbonTransparent: ribbon.material.transparent,
+        ribbonPolygonOffset: ribbon.material.polygonOffset,
+        ribbonRenderOrder: ribbon.renderOrder,
+        axisDepthWrite: axis.material.depthWrite,
+      };
+    });
+    expect(backToA).toEqual({
+      rungsVisible: true,
+      legendRungsHidden: false,
+      ribbonTransparent: true,
+      ribbonPolygonOffset: true,
+      ribbonRenderOrder: 10,
+      axisDepthWrite: false,
+    });
     expect(errors).toEqual([]);
   });
 });

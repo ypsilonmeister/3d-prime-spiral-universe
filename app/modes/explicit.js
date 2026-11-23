@@ -35,14 +35,16 @@ export const EXPLICIT_SAMPLES_FALLBACK = 400;
 const TURNS = 6, R0 = 600, R1 = 2200, H = 1300, AMP = 220;
 const TUBE_SEGMENTS = 24, SHELL_RING_INTERVAL = 24, RIBBON_HALF_WIDTH = 28;
 const SHELL_COLOR = 0x8866ff, SHELL_OPACITY = 0.35;
-const RUNG_TARGET_COUNT = 100, RUNG_COLOR = 0xffd2a6, RUNG_OPACITY = 0.5;
+const RUNG_TARGET_COUNT = 100, RUNG_COLOR = 0xeef4ff, RUNG_OPACITY = 0.6;
+const RUNG_RADIUS = 8, RUNG_RADIAL_SEGMENTS = 8;
+const RUNG_UP = new THREE.Vector3(0, 1, 0);
 const RENDER_ORDER_AXIS = 0;
 const RENDER_ORDER_SHELL = 1;
 const RENDER_ORDER_RING = 2;
 const RENDER_ORDER_PRIMES = 2;
-const RENDER_ORDER_RUNGS = 3;
 const RENDER_ORDER_RIBBON = 10;
-const RENDER_ORDER_MEASURED = 11;
+const RENDER_ORDER_RUNGS = 11;
+const RENDER_ORDER_MEASURED = 12;
 const RESIDUAL_FULL = 0.25 * AMP; // residual (display units) mapped to the "hot" colour
 const DEFAULT_N = 100;
 const COL_BASE = new THREE.Color(0xffaa33), COL_HOT = new THREE.Color(0xff2d55);
@@ -99,6 +101,7 @@ function disposeGroup() {
     group.traverse(o => {
         if (o.geometry) o.geometry.dispose();
         if (o.material) disposeMaterial(o.material);
+        if (o.isInstancedMesh && typeof o.dispose === 'function') o.dispose();
     });
     group.clear();
     if (group.parent) group.parent.remove(group);
@@ -144,6 +147,22 @@ function isPrimesVisible() {
     return !!(primes && primes.visible);
 }
 
+function applyRibbonRenderStyle(ribbonObj, isViewA) {
+    const mat = ribbonObj.material;
+    const nextTransparent = isViewA;
+    if (mat.transparent !== nextTransparent) {
+        mat.transparent = nextTransparent;
+        mat.needsUpdate = true;
+    }
+    mat.opacity = 1;
+    mat.depthWrite = true;
+    mat.depthTest = true;
+    mat.polygonOffset = isViewA;
+    mat.polygonOffsetFactor = isViewA ? 1 : 0;
+    mat.polygonOffsetUnits = isViewA ? 1 : 0;
+    ribbonObj.renderOrder = isViewA ? RENDER_ORDER_RIBBON : 0;
+}
+
 function applyViewVisibility() {
     if (!group) return;
     const showA = currentView() === 'a';
@@ -155,6 +174,19 @@ function applyViewVisibility() {
     if (ringObj) ringObj.visible = showA;
     const rungsObj = group.getObjectByName('explicit-rungs');
     if (rungsObj) rungsObj.visible = showA;
+    const axisObj = group.getObjectByName('explicit-axis');
+    if (axisObj) {
+        axisObj.material.depthWrite = !showA;
+        axisObj.renderOrder = showA ? RENDER_ORDER_AXIS : 0;
+    }
+    const primesObj = group.getObjectByName('explicit-primes');
+    if (primesObj) {
+        primesObj.renderOrder = showA ? RENDER_ORDER_PRIMES : 0;
+    }
+    const ribbonObj = group.getObjectByName('explicit-ribbon');
+    if (ribbonObj) {
+        applyRibbonRenderStyle(ribbonObj, showA);
+    }
 }
 
 function applyPrimesVisibility() {
@@ -239,8 +271,8 @@ function renderExplicitPanel() {
     }
     const legRungs = document.getElementById('explicit-legend-rungs');
     if (legRungs) {
-        legRungs.style.opacity = isViewB ? '0.4' : '1';
-        legRungs.innerHTML = `<span style="color:#ffd2a6" aria-hidden="true">│</span> 残差 rung（実測と再構成の差）${isViewB ? '（ビュー B 非表示）' : ''}`;
+        legRungs.hidden = isViewB;
+        legRungs.innerHTML = '<span style="color:#eef4ff" aria-hidden="true">│</span> 残差 rung（実測と再構成の差）';
     }
     const legShell = document.getElementById('explicit-legend-shell');
     if (legShell) {
@@ -522,16 +554,9 @@ function updateRibbon(recon, residual) {
         const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
             vertexColors: true,
             side: THREE.DoubleSide,
-            transparent: true,
-            opacity: 1,
-            depthWrite: true,
-            depthTest: true,
-            polygonOffset: true,
-            polygonOffsetFactor: 1,
-            polygonOffsetUnits: 1,
         }));
         mesh.name = 'explicit-ribbon';
-        mesh.renderOrder = RENDER_ORDER_RIBBON;
+        applyRibbonRenderStyle(mesh, !isViewB);
         group.add(mesh);
     } else {
         geom.geometry.attributes.position.needsUpdate = true;
@@ -541,43 +566,49 @@ function updateRibbon(recon, residual) {
     }
 }
 
-// Residual rungs (View A only): thin line segments linking measured and reconstructed curves
-// at fixed sample intervals so convergence with increasing N is directly legible.
+// Residual rungs (View A only): thin 3D cylinders (InstancedMesh) linking measured and reconstructed curves
+// at fixed sample intervals so convergence with increasing N is directly legible from the default viewpoint.
 function updateRungs(recon) {
     const c = cache, indices = c.rungIndices, count = indices.length;
     let rungs = group.getObjectByName('explicit-rungs');
     const first = !rungs;
-    const pos = first ? new Float32Array(count * 2 * 3) : rungs.geometry.attributes.position.array;
-    const qMeas = new THREE.Vector3(), qRecon = new THREE.Vector3();
-    for (let k = 0; k < count; k++) {
-        const i = indices[k];
-        const f = c.frames[i];
-        const dRecon = compressedOffset(recon[i], c.xs[i], c.yRef, AMP, c.kind);
-        qMeas.copy(f.P).addScaledVector(f.n, c.dMeas[i]);
-        qRecon.copy(f.P).addScaledVector(f.n, dRecon);
-        const o = k * 6;
-        pos[o] = qMeas.x;     pos[o + 1] = qMeas.y;     pos[o + 2] = qMeas.z;
-        pos[o + 3] = qRecon.x; pos[o + 4] = qRecon.y; pos[o + 5] = qRecon.z;
-    }
     if (first) {
-        const g = new THREE.BufferGeometry();
-        g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        g.computeBoundingSphere();
-        rungs = new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+        const g = new THREE.CylinderGeometry(RUNG_RADIUS, RUNG_RADIUS, 1, RUNG_RADIAL_SEGMENTS);
+        const m = new THREE.MeshBasicMaterial({
             color: RUNG_COLOR,
             transparent: true,
             opacity: RUNG_OPACITY,
             depthWrite: false,
-        }));
+            depthTest: true,
+            polygonOffset: true,
+            polygonOffsetFactor: -2,
+            polygonOffsetUnits: -2,
+        });
+        rungs = new THREE.InstancedMesh(g, m, count);
         rungs.name = 'explicit-rungs';
         rungs.renderOrder = RENDER_ORDER_RUNGS;
         rungs.visible = currentView() === 'a';
         group.add(rungs);
-    } else {
-        rungs.geometry.attributes.position.needsUpdate = true;
-        rungs.geometry.computeBoundingSphere();
-        if (rungs.geometry.boundingBox) rungs.geometry.computeBoundingBox();
     }
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scale = new THREE.Vector3();
+    const mat4 = new THREE.Matrix4();
+    for (let k = 0; k < count; k++) {
+        const i = indices[k];
+        const f = c.frames[i];
+        const dMeas = c.dMeas[i];
+        const dRecon = compressedOffset(recon[i], c.xs[i], c.yRef, AMP, c.kind);
+        const len = Math.abs(dRecon - dMeas);
+        pos.copy(f.P).addScaledVector(f.n, 0.5 * (dMeas + dRecon));
+        quat.setFromUnitVectors(RUNG_UP, f.n);
+        scale.set(1, Math.max(len, 1e-6), 1);
+        mat4.compose(pos, quat, scale);
+        rungs.setMatrixAt(k, mat4);
+    }
+    rungs.instanceMatrix.needsUpdate = true;
+    rungs.computeBoundingSphere();
+    if (rungs.boundingBox) rungs.computeBoundingBox();
 }
 
 // ---- computation orchestration -------------------------------------------

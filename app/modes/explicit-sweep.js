@@ -90,11 +90,15 @@ function clearSweepTimer() {
 
 export function syncExplicitSweepButton() {
     if (typeof document === 'undefined') return;
-    const btn = document.getElementById('explicit-sweep-btn');
-    if (!btn) return;
     const st = state.explicitSweepState || 'idle';
-    btn.textContent = BUTTON_LABELS[st] || BUTTON_LABELS.idle;
-    btn.classList.toggle('sweeping', st === 'running');
+    const label = BUTTON_LABELS[st] || BUTTON_LABELS.idle;
+    const isRunning = st === 'running';
+    for (const id of ['explicit-sweep-btn', 'rh-guide-sweep-btn']) {
+        const btn = document.getElementById(id);
+        if (!btn) continue;
+        btn.textContent = label;
+        btn.classList.toggle('sweeping', isRunning);
+    }
 }
 
 export function setExplicitSweepApplyCallback(fn) {

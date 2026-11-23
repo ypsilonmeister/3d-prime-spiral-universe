@@ -23,7 +23,10 @@ export function initElements() {
         'ui-overlay', 'show-ui-hint', 'help-tooltip', 'nav-rh', 'group-lattice', 'group-spacing',
         'group-zeta-toggle', 'group-explicit-toggle', 'sw-explicit', 'explicit-sweep-btn',
         'explicit-kind-psi1', 'explicit-kind-psi',
-        'explicit-view-a', 'explicit-view-b', 'sw-explicit-primes', 'group-padic-toggle', 'group-primedim-toggle',
+        'explicit-view-a', 'explicit-view-b', 'sw-explicit-primes',
+        'rh-guide-panel', 'rh-guide-open-btn', 'rh-guide-card', 'rh-guide-collapse-btn',
+        'rh-guide-sweep-btn', 'rh-guide-n-val', 'rh-exit-btn',
+        'group-padic-toggle', 'group-primedim-toggle',
         'group-ntl-toggle', 'group-sieve-toggle'
     ];
     for (const id of ids) {
@@ -215,6 +218,26 @@ export function updateUI() {
     if (elements['sw-explicit']) elements['sw-explicit'].classList.toggle('on', state.explicitModeActive);
     const expCtl = document.getElementById('explicit-controls');
     if (expCtl) expCtl.style.display = state.explicitModeActive ? '' : 'none';
+
+    const rhPanel = elements['rh-guide-panel'];
+    if (rhPanel) {
+        const showGuide = Boolean(state.explicitModeActive && state.rhGuideVisible);
+        const collapsed = Boolean(state.rhGuideCollapsed);
+        rhPanel.hidden = !showGuide;
+        rhPanel.classList.toggle('collapsed', collapsed);
+        rhPanel.classList.toggle('hidden', !state.uiVisible);
+        const openBtn = elements['rh-guide-open-btn'];
+        if (openBtn) {
+            openBtn.hidden = !collapsed;
+            openBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        }
+        const card = elements['rh-guide-card'];
+        if (card) card.hidden = collapsed;
+        const collapseBtn = elements['rh-guide-collapse-btn'];
+        if (collapseBtn) {
+            collapseBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        }
+    }
 
     if (elements['sw-padic']) elements['sw-padic'].classList.toggle('on', state.padicModeActive);
     if (elements['padic-controls']) elements['padic-controls'].style.display = state.padicModeActive ? '' : 'none';

@@ -21,7 +21,8 @@ export function initElements() {
         'spacing-val', 'spacing-slider', 'range-info', 'current-state-text',
         'ui-overlay', 'show-ui-hint', 'help-tooltip', 'group-lattice', 'group-spacing',
         'group-zeta-toggle', 'group-explicit-toggle', 'sw-explicit', 'explicit-kind-psi1', 'explicit-kind-psi',
-        'explicit-view-a', 'explicit-view-b', 'sw-explicit-primes', 'group-padic-toggle', 'group-primedim-toggle'
+        'explicit-view-a', 'explicit-view-b', 'sw-explicit-primes', 'group-padic-toggle', 'group-primedim-toggle',
+        'group-ntl-toggle', 'group-sieve-toggle'
     ];
     for (const id of ids) {
         elements[id] = document.getElementById(id);
@@ -32,11 +33,49 @@ export function getElement(id) {
     return elements[id];
 }
 
+const BOOT_WORKER_STAGES = {
+    primes:       ['Sieving primes',       0, 15],
+    ntl_d_sigma:  ['Counting divisors',   15, 60],
+    ntl_omega_mu: ['Factoring (ω, μ)',    60, 88],
+    ntl_phi:      ['Computing totient φ', 88, 98],
+};
+
 export function setBootStage(text, pct) {
     const stage = elements['boot-stage'];
     const prog  = elements['boot-progress'];
     if (stage && text != null) stage.textContent = text;
     if (prog  && pct   != null) prog.value = pct;
+}
+
+export function onBootProgress(stage, pct) {
+    const s = BOOT_WORKER_STAGES[stage];
+    if (s) {
+        const [label, lo, hi] = s;
+        setBootStage(label, lo + (hi - lo) * (pct / 100));
+    }
+}
+
+export function onSieveProgress(finished, foundCount, limit, currentP) {
+    const el = elements['sieve-stats'];
+    if (el) {
+        if (finished) {
+            el.textContent = `Done — ${foundCount} primes found`;
+        } else {
+            const sqrtN = Math.floor(Math.sqrt(limit));
+            el.textContent = `Sieving ×${currentP} | Primes: ${foundCount} | √N=${sqrtN}`;
+        }
+    }
+    const prog = elements['sieve-progress'];
+    if (prog) {
+        const sqrtN = Math.floor(Math.sqrt(limit));
+        prog.value = Math.min(currentP / sqrtN, 1.0) * 100;
+    }
+}
+
+export function onSieveUIUpdate() {
+    const btn = elements['sieve-play-btn'];
+    if (btn) btn.textContent = state.sievePlaying ? '⏸ Pause' : '▶ Play';
+    onSieveProgress(state.sieveFinished, state.sieveFoundCount, state.sieveLimit, state.sieveCurrentP);
 }
 
 export function hideBootOverlay() {
@@ -81,16 +120,21 @@ export function updateUIDisabledState() {
     const padic = state.padicModeActive;
     const pdim  = state.primeDimModeActive;
     const explicit = state.explicitModeActive;
+    const sieve = state.sieveModeActive;
     const exclusivePos = padic || pdim;
-    setGroupDisabled('group-lattice',        exclusivePos || explicit);
-    setGroupDisabled('group-spacing',        exclusivePos || explicit);
-    setGroupDisabled('group-zeta-toggle',    exclusivePos || explicit);
-    setGroupDisabled('group-explicit-toggle', exclusivePos);
-    setGroupDisabled('zeta-controls',        exclusivePos);
-    setGroupDisabled('group-padic-toggle',   pdim || explicit);
-    setGroupDisabled('padic-controls',       pdim);
-    setGroupDisabled('group-primedim-toggle', padic || explicit);
-    setGroupDisabled('primedim-controls',    padic);
+    setGroupDisabled('group-lattice',         exclusivePos || explicit || sieve);
+    setGroupDisabled('group-spacing',         exclusivePos || explicit || sieve);
+    setGroupDisabled('group-zeta-toggle',     exclusivePos || explicit || sieve);
+    setGroupDisabled('group-explicit-toggle', exclusivePos || sieve);
+    setGroupDisabled('zeta-controls',         exclusivePos || sieve);
+    setGroupDisabled('group-padic-toggle',    pdim || explicit || sieve);
+    setGroupDisabled('padic-controls',        pdim || explicit || sieve);
+    setGroupDisabled('group-primedim-toggle', padic || explicit || sieve);
+    setGroupDisabled('primedim-controls',     padic || explicit || sieve);
+    setGroupDisabled('group-ntl-toggle',      sieve);
+    setGroupDisabled('ntl-controls',          sieve);
+    setGroupDisabled('group-sieve-toggle',    exclusivePos || explicit);
+    setGroupDisabled('sieve-controls',        exclusivePos || explicit);
 }
 
 export function updateUI() {

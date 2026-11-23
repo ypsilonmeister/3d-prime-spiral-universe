@@ -101,6 +101,247 @@ test.describe('PrimeCrystal Basic Verification', () => {
     await expect(page.locator('#group-padic-toggle')).not.toHaveClass(/ui-section-disabled/);
   });
 
+  test('should handle Sieve owner exclusivity and progress callbacks', async ({ page }) => {
+    // Reduce point count so Sieve animation runs quickly under headless software WebGL
+    await page.locator('#count-slider').fill('1000');
+    await expect(page.locator('#count-val')).toHaveText('1,000');
+
+    // Enable Sieve mode
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).toHaveClass(/on/);
+    await expect(page.locator('#sieve-controls')).toBeVisible();
+
+    // Verify Sieve UI & progress callbacks (Issue #2)
+    await expect(page.locator('#sieve-play-btn')).toHaveText('▶ Play');
+    await expect(page.locator('#sieve-stats')).toHaveText('Sieving ×2 | Primes: 1 | √N=31');
+    await page.locator('#sieve-play-btn').click();
+    await expect(page.locator('#sieve-stats')).toHaveText('Done — 168 primes found', { timeout: 15_000 });
+    await expect(page.locator('#sieve-play-btn')).toHaveText('▶ Play');
+    const progVal = await page.locator('#sieve-progress').evaluate(el => el.value);
+    expect(progVal).toBe(100);
+
+    // Verify Sieve disables other owner and conflicting sections (Issue #1)
+    await expect(page.locator('#group-primedim-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-padic-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-explicit-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-zeta-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-ntl-toggle')).toHaveClass(/ui-section-disabled/);
+
+    // Disable Sieve mode and verify sections are re-enabled
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).not.toHaveClass(/on/);
+    await expect(page.locator('#sieve-controls')).toBeHidden();
+    await expect(page.locator('#group-primedim-toggle')).not.toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-padic-toggle')).not.toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-explicit-toggle')).not.toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-zeta-toggle')).not.toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-ntl-toggle')).not.toHaveClass(/ui-section-disabled/);
+
+    // Re-enable Sieve, then activate another owner (p-adic) to verify Sieve is exited
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).toHaveClass(/on/);
+    await page.locator('#group-padic-toggle .toggle-row').dispatchEvent('click');
+
+    await expect(page.locator('#sw-padic')).toHaveClass(/on/);
+    await expect(page.locator('#sw-sieve')).not.toHaveClass(/on/);
+    await expect(page.locator('#sieve-controls')).toBeHidden();
+    await expect(page.locator('#group-sieve-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-padic-toggle')).not.toHaveClass(/ui-section-disabled/);
+    const flags = await page.evaluate(() => ({
+      sieve: window.__APP_STATE__.sieveModeActive,
+      padic: window.__APP_STATE__.padicModeActive,
+    }));
+    expect(flags).toEqual({ sieve: false, padic: true });
+
+    // Disable p-adic mode and verify Sieve section is re-enabled
+    await page.locator('#group-padic-toggle .toggle-row').click();
+    await expect(page.locator('#sw-padic')).not.toHaveClass(/on/);
+    await expect(page.locator('#group-sieve-toggle')).not.toHaveClass(/ui-section-disabled/);
+  });
+
+  test('should stop active Zeta Wave and NTL overlays when entering Sieve and restore visuals on exit', async ({ page }) => {
+    await page.locator('#count-slider').fill('1000');
+    await expect(page.locator('#count-val')).toHaveText('1,000');
+
+    const snapshot = () => page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const n = s.activePointCount;
+      const maxAbs = (arr, len) => {
+        let m = 0;
+        for (let i = 0; i < len; i++) {
+          const a = Math.abs(arr[i]);
+          if (a > m) m = a;
+        }
+        return m;
+      };
+      return {
+        flags: {
+          zeta: s.zetaModeActive,
+          ntl: s.ntlModeActive,
+          sieve: s.sieveModeActive,
+        },
+        zetaMax: maxAbs(s.zetaOffsets, n),
+        ntlMax: maxAbs(s.ntlOffsets, n),
+        targets: Array.from(s.targetPositions.slice(0, n * 3)),
+        colors: Array.from(s.geometry.attributes.customColor.array.slice(0, n * 3)),
+        sizes: Array.from(s.geometry.attributes.size.array.slice(0, n)),
+      };
+    });
+
+    const baseline = await snapshot();
+
+    // Order from review #335: Zeta Wave -> NTL -> Sieve
+    await page.locator('#group-zeta-toggle .toggle-row').click();
+    await expect(page.locator('#sw-zeta')).toHaveClass(/on/);
+    await page.locator('#zeta-n-slider').fill('5');
+    await expect.poll(
+      async () => (await snapshot()).zetaMax,
+      { timeout: 15_000, message: 'Zeta offsets should be computed' },
+    ).toBeGreaterThan(0);
+
+    await page.locator('#sw-ntl').click();
+    await expect(page.locator('#sw-ntl')).toHaveClass(/on/);
+    const withOverlays = await snapshot();
+    expect(withOverlays.flags).toEqual({ zeta: true, ntl: true, sieve: false });
+    expect(withOverlays.ntlMax).toBeGreaterThan(0);
+    expect(withOverlays.targets).not.toEqual(baseline.targets);
+    expect(withOverlays.colors).not.toEqual(baseline.colors);
+
+    // Enter Sieve while Zeta Wave and NTL are active
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).toHaveClass(/on/);
+    await expect(page.locator('#sieve-controls')).toBeVisible();
+    await expect(page.locator('#sw-zeta')).not.toHaveClass(/on/);
+    await expect(page.locator('#zeta-controls')).toBeHidden();
+    await expect(page.locator('#group-zeta-toggle')).toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#sw-ntl')).not.toHaveClass(/on/);
+    await expect(page.locator('#ntl-controls')).toBeHidden();
+    await expect(page.locator('#group-ntl-toggle')).toHaveClass(/ui-section-disabled/);
+
+    const duringSieve = await snapshot();
+    expect(duringSieve.flags).toEqual({ zeta: false, ntl: false, sieve: true });
+    expect(duringSieve.zetaMax).toBe(0);
+    expect(duringSieve.ntlMax).toBe(0);
+    expect(duringSieve.targets).toEqual(baseline.targets);
+    expect(duringSieve.colors).not.toEqual(baseline.colors);
+
+    // Programmatic toggle attempts on incompatible overlays stay blocked while Sieve owns the view
+    await page.locator('#group-zeta-toggle .toggle-row').dispatchEvent('click');
+    await page.locator('#sw-ntl').dispatchEvent('click');
+    const afterBlockedToggle = await snapshot();
+    expect(afterBlockedToggle.flags).toEqual({ zeta: false, ntl: false, sieve: true });
+    expect(afterBlockedToggle.zetaMax).toBe(0);
+    expect(afterBlockedToggle.ntlMax).toBe(0);
+    expect(afterBlockedToggle.targets).toEqual(baseline.targets);
+
+    // Exit Sieve and verify baseline visuals and targets are restored
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).not.toHaveClass(/on/);
+    await expect(page.locator('#group-zeta-toggle')).not.toHaveClass(/ui-section-disabled/);
+    await expect(page.locator('#group-ntl-toggle')).not.toHaveClass(/ui-section-disabled/);
+
+    const afterFirstExit = await snapshot();
+    expect(afterFirstExit.flags).toEqual({ zeta: false, ntl: false, sieve: false });
+    expect(afterFirstExit.targets).toEqual(baseline.targets);
+    expect(afterFirstExit.colors).toEqual(baseline.colors);
+    expect(afterFirstExit.sizes).toEqual(baseline.sizes);
+
+    // Review #335 color-restoration sequence: NTL ON -> Sieve ON -> Sieve OFF
+    await page.locator('#sw-ntl').click();
+    await expect(page.locator('#sw-ntl')).toHaveClass(/on/);
+    const ntlOnly = await snapshot();
+    expect(ntlOnly.flags).toEqual({ zeta: false, ntl: true, sieve: false });
+    expect(ntlOnly.colors).not.toEqual(baseline.colors);
+
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).toHaveClass(/on/);
+    await expect(page.locator('#sw-ntl')).not.toHaveClass(/on/);
+    const sieveFromNtl = await snapshot();
+    expect(sieveFromNtl.flags).toEqual({ zeta: false, ntl: false, sieve: true });
+    expect(sieveFromNtl.ntlMax).toBe(0);
+    expect(sieveFromNtl.targets).toEqual(baseline.targets);
+    expect(sieveFromNtl.colors).not.toEqual(baseline.colors);
+
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).not.toHaveClass(/on/);
+    const afterNtlSieveExit = await snapshot();
+    expect(afterNtlSieveExit.flags).toEqual({ zeta: false, ntl: false, sieve: false });
+    expect(afterNtlSieveExit.targets).toEqual(baseline.targets);
+    expect(afterNtlSieveExit.colors).toEqual(baseline.colors);
+    expect(afterNtlSieveExit.sizes).toEqual(baseline.sizes);
+  });
+
+  test('should rebuild normal lattice coordinates when switching directly from p-adic or PrimeDim to Sieve', async ({ page }) => {
+    await page.locator('#count-slider').fill('1000');
+    await expect(page.locator('#count-val')).toHaveText('1,000');
+
+    const readPositions = () => page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const n = s.activePointCount;
+      return {
+        flags: {
+          padic: s.padicModeActive,
+          primeDim: s.primeDimModeActive,
+          sieve: s.sieveModeActive,
+        },
+        hasAxisLines: s.primeDimAxisLines !== null,
+        axisLabelCount: s.primeDimAxisLabels.length,
+        baseTargets: Array.from(s.baseTargetPositions.slice(0, n * 3)),
+        targets: Array.from(s.targetPositions.slice(0, n * 3)),
+      };
+    });
+
+    const baseline = await readPositions();
+
+    // Direct switch: p-adic -> Sieve
+    await page.locator('#group-padic-toggle .toggle-row').click();
+    await expect(page.locator('#sw-padic')).toHaveClass(/on/);
+    const padicState = await readPositions();
+    expect(padicState.flags).toEqual({ padic: true, primeDim: false, sieve: false });
+    expect(padicState.targets).not.toEqual(baseline.targets);
+
+    await page.locator('#group-sieve-toggle .toggle-row').dispatchEvent('click');
+    await expect(page.locator('#sw-sieve')).toHaveClass(/on/);
+    await expect(page.locator('#sw-padic')).not.toHaveClass(/on/);
+    await expect(page.locator('#group-padic-toggle')).toHaveClass(/ui-section-disabled/);
+
+    const sieveFromPadic = await readPositions();
+    expect(sieveFromPadic.flags).toEqual({ padic: false, primeDim: false, sieve: true });
+    expect(sieveFromPadic.baseTargets).toEqual(baseline.baseTargets);
+    expect(sieveFromPadic.targets).toEqual(baseline.targets);
+
+    // Exit Sieve
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).not.toHaveClass(/on/);
+
+    // Direct switch: PrimeDim -> Sieve
+    await page.locator('#group-primedim-toggle .toggle-row').click();
+    await expect(page.locator('#sw-primedim')).toHaveClass(/on/);
+    const primeDimState = await readPositions();
+    expect(primeDimState.flags).toEqual({ padic: false, primeDim: true, sieve: false });
+    expect(primeDimState.hasAxisLines).toBe(true);
+    expect(primeDimState.targets).not.toEqual(baseline.targets);
+
+    await page.locator('#group-sieve-toggle .toggle-row').dispatchEvent('click');
+    await expect(page.locator('#sw-sieve')).toHaveClass(/on/);
+    await expect(page.locator('#sw-primedim')).not.toHaveClass(/on/);
+    await expect(page.locator('#group-primedim-toggle')).toHaveClass(/ui-section-disabled/);
+
+    const sieveFromPrimeDim = await readPositions();
+    expect(sieveFromPrimeDim.flags).toEqual({ padic: false, primeDim: false, sieve: true });
+    expect(sieveFromPrimeDim.hasAxisLines).toBe(false);
+    expect(sieveFromPrimeDim.axisLabelCount).toBe(0);
+    expect(sieveFromPrimeDim.baseTargets).toEqual(baseline.baseTargets);
+    expect(sieveFromPrimeDim.targets).toEqual(baseline.targets);
+
+    // Exit Sieve and verify normal lattice remains intact
+    await page.locator('#group-sieve-toggle .toggle-row').click();
+    await expect(page.locator('#sw-sieve')).not.toHaveClass(/on/);
+    const afterExit = await readPositions();
+    expect(afterExit.flags).toEqual({ padic: false, primeDim: false, sieve: false });
+    expect(afterExit.targets).toEqual(baseline.targets);
+  });
+
   test('should recompute active mode variables when count changes', async ({ page }) => {
     // Enable PrimeDim mode
     await page.locator('#group-primedim-toggle .toggle-row').click();

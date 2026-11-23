@@ -99,6 +99,10 @@ export const zetaMode = {
         if (state.zetaAnimating) {
             state.zetaAnimating = false;
             clearTimeout(state.zetaAnimFrame);
+            if (typeof document !== 'undefined') {
+                const btn = document.getElementById('zeta-anim-btn');
+                if (btn) btn.textContent = 'Animate';
+            }
         }
         cancelPendingZetaRequests();
         state.zetaOffsets.fill(0);

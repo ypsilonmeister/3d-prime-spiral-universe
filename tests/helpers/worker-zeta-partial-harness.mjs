@@ -5,24 +5,31 @@
 //   - final zeta_done matches single-pass accumulateZeroSumPsi bit-for-bit
 //   - mutating transferred partial buffers does not corrupt _zetaCache (cache safety)
 //   - zeta_cancel and superseding zeta requests (growing and shrinking N) drop stale partials cleanly
-// Usage: node worker-zeta-partial-harness.mjs <maxPoints>
+// Usage:
+//   node worker-zeta-partial-harness.mjs <maxPoints>
+//   node worker-zeta-partial-harness.mjs <maxPoints> --real-clock <startN> <endN>
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { performance as nodePerformance } from 'node:perf_hooks';
 
 const MAX = +process.argv[2] || 4001;
+const REAL_CLOCK_MODE = process.argv[3] === '--real-clock';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const { ZETA_ZEROS_1000 } = await import(join(root, 'shared/zeta-zeros-1000.js'));
 const { buildLnSqrtCaches, buildZetaDenom, accumulateZeroSumPsi, maxAbs, zetaNormScale, scaleInto } =
     await import(join(root, 'shared/explicit-formula.js'));
 
-// Controllable monotonic clock: advance 150ms per completed chunk so chunk 1 emits immediately
-// and subsequent partials emit every 3 chunks (450ms >= 400ms).
+// Controllable monotonic clock (default mode): advance 150ms per completed chunk so chunk 1
+// emits immediately and subsequent partials emit every 3 chunks (450ms >= 350ms).
+// In --real-clock mode, keep Node's real high-resolution performance.now() to measure actual D3 intervals.
 let fakeNow = 0;
-Object.defineProperty(globalThis, 'performance', {
-    value: { now: () => fakeNow },
-    configurable: true,
-    writable: true,
-});
+if (!REAL_CLOCK_MODE) {
+    Object.defineProperty(globalThis, 'performance', {
+        value: { now: () => fakeNow },
+        configurable: true,
+        writable: true,
+    });
+}
 
 let onPost = null;
 globalThis.self = {
@@ -58,6 +65,49 @@ function arraysBitEqual(a, b) {
 const CHUNK_STEP_MS = 150;
 const AMP = 1.5;
 const SPACING = 4.0;
+
+if (REAL_CLOCK_MODE) {
+    const startN = +process.argv[4] || 100;
+    const endN = +process.argv[5] || 300;
+    const waitDone = (msg) => new Promise((resolve) => {
+        const partialEvents = [];
+        const tStart = nodePerformance.now();
+        onPost = (m) => {
+            if (m.type === 'zeta_partial' && m.reqId === msg.reqId) {
+                partialEvents.push({ doneK: m.doneK, t: nodePerformance.now() - tStart });
+            } else if (m.type === 'zeta_done' && m.reqId === msg.reqId) {
+                const totalMs = nodePerformance.now() - tStart;
+                onPost = null;
+                resolve({ done: m, partialEvents, totalMs });
+            }
+        };
+        self.onmessage({ data: msg });
+    });
+
+    if (startN > 0) {
+        await waitDone({ type: 'zeta', reqId: 1, N: startN, amplitude: AMP, spacing: SPACING });
+    }
+    const run = await waitDone({ type: 'zeta', reqId: 2, N: endN, amplitude: AMP, spacing: SPACING });
+    const refEnd = referenceResult(endN, AMP, SPACING);
+    const intervalsMs = [];
+    for (let i = 1; i < run.partialEvents.length; i++) {
+        intervalsMs.push(+(run.partialEvents[i].t - run.partialEvents[i - 1].t).toFixed(2));
+    }
+    console.log(JSON.stringify({
+        max: MAX,
+        startN,
+        endN,
+        firstMs: run.partialEvents[0] ? +run.partialEvents[0].t.toFixed(2) : null,
+        firstK: run.partialEvents[0] ? run.partialEvents[0].doneK : null,
+        totalMs: +run.totalMs.toFixed(2),
+        partialsCount: run.partialEvents.length,
+        doneKs: run.partialEvents.map(p => p.doneK),
+        intervalsMs,
+        doneRawBitEqual: arraysBitEqual(run.done.rawOffsets, refEnd.raw),
+        doneOffsetsBitEqual: arraysBitEqual(run.done.offsets, refEnd.offsets),
+    }));
+    process.exit(0);
+}
 
 function runRequest(msg, { advanceClock = true, poisonPartials = false } = {}) {
     return new Promise((resolve) => {

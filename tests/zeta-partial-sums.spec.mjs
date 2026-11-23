@@ -100,7 +100,7 @@ test.describe('worker zeta_partial protocol (Node)', () => {
             expect(p.doneK).toBeGreaterThan(prevDone);
             expect(p.doneK).toBeLessThan(1000);
             if (prevT !== null) {
-                expect(p.t - prevT).toBeGreaterThanOrEqual(400);
+                expect(p.t - prevT).toBeGreaterThanOrEqual(350);
                 expect(p.t - prevT).toBeLessThanOrEqual(450);
             }
             expect(p.offsetsIsF32).toBe(true);
@@ -157,6 +157,24 @@ test.describe('worker zeta_partial protocol (Node)', () => {
         expect(out.supersedeGrow.doneN).toBe(160);
         expect(out.supersedeGrow.doneRawBitEqual).toBe(true);
         expect(out.supersedeGrow.doneOffsetsBitEqual).toBe(true);
+    });
+
+    test('real-clock MAX=320000 partial emission intervals stay within D3 350-450ms and match bit-exact final result', () => {
+        const out = JSON.parse(execFileSync(
+            process.execPath,
+            ['--no-warnings', PARTIAL_HARNESS, '320000', '--real-clock', '100', '350'],
+            { encoding: 'utf8', maxBuffer: 1 << 24 }
+        ));
+
+        expect(out.firstK).toBe(120);
+        expect(out.partialsCount).toBeGreaterThanOrEqual(5);
+        expect(out.intervalsMs.length).toBe(out.partialsCount - 1);
+        for (const dt of out.intervalsMs) {
+            expect(dt).toBeGreaterThanOrEqual(350);
+            expect(dt).toBeLessThanOrEqual(450);
+        }
+        expect(out.doneRawBitEqual).toBe(true);
+        expect(out.doneOffsetsBitEqual).toBe(true);
     });
 });
 
@@ -323,6 +341,156 @@ test.describe('zeta partial sums live rendering & isolation (Browser)', () => {
             off99: 0,
         });
         await expect(page.locator('#zeta-progress-wrap')).toBeHidden();
+    });
+
+    test('pre-rAF N change immediately invalidates in-flight partials/progress/done before next frame', async ({ page }) => {
+        test.setTimeout(120_000);
+        await boot(page, { spyZeta: true });
+        await page.locator('#group-zeta-toggle .toggle-row').click();
+
+        // Start 0 -> 600 and wait for the first zeta_partial
+        await setSlider(page, '#zeta-n-slider', 600);
+        await expect.poll(async () => page.evaluate(() => (
+            window.__zetaEvents.some(e => e.type === 'zeta_partial' && e.targetN === 600)
+        )), { timeout: 20_000, intervals: [50] }).toBe(true);
+
+        const oldReqId = await page.evaluate(() => (
+            window.__zetaEvents.find(e => e.type === 'zeta_partial' && e.targetN === 600).reqId
+        ));
+
+        // In the exact same JS turn (strictly BEFORE rafThrottle's next rAF fires):
+        //   1. Dispatch slider input to N=50
+        //   2. Deliver stale progress, zeta_partial, and zeta_done with oldReqId
+        // State buffers, zetaComputedN, targetPositions, and progress UI must stay untouched.
+        const preRafResult = await page.evaluate((staleId) => {
+            const s = window.__APP_STATE__;
+            const beforeComputed = s.zetaComputedN;
+            const beforeRaw99 = s.zetaOffsetsRaw[99];
+            const beforeOff99 = s.zetaOffsets[99];
+            const beforeTargetZ99 = s.targetPositions[99 * 3 + 2];
+
+            const slider = document.getElementById('zeta-n-slider');
+            slider.value = '50';
+            slider.dispatchEvent(new Event('input', { bubbles: true }));
+
+            window.__workerOnMessage({
+                data: {
+                    type: 'progress',
+                    stage: 'zeta',
+                    reqId: staleId,
+                    startK: 0,
+                    doneK: 40,
+                    targetN: 600,
+                    pct: 6.7,
+                },
+            });
+            window.__workerOnMessage({
+                data: {
+                    type: 'zeta_partial',
+                    reqId: staleId,
+                    doneK: 40,
+                    targetN: 600,
+                    offsets: new Float32Array(s.MAX_POINTS).fill(1234),
+                    rawOffsets: new Float32Array(s.MAX_POINTS).fill(-1234),
+                },
+            });
+            const wrap = document.getElementById('zeta-progress-wrap');
+            const afterPartialHidden = wrap?.style.display === 'none';
+            const afterPartialText = document.getElementById('zeta-progress-text')?.textContent || '';
+            const afterPartialComputed = s.zetaComputedN;
+            const afterPartialRaw99 = s.zetaOffsetsRaw[99];
+
+            window.__workerOnMessage({
+                data: {
+                    type: 'zeta_done',
+                    reqId: staleId,
+                    N: 600,
+                    offsets: new Float32Array(s.MAX_POINTS).fill(5678),
+                    rawOffsets: new Float32Array(s.MAX_POINTS).fill(-5678),
+                    recomputed: true,
+                },
+            });
+
+            const text = document.getElementById('zeta-progress-text')?.textContent || '';
+            return {
+                requestedN: s.zetaZeroCount,
+                afterPartialComputedUnchanged: afterPartialComputed === beforeComputed,
+                afterPartialRawUnchanged: afterPartialRaw99 === beforeRaw99,
+                afterPartialHidden,
+                afterPartialText,
+                computedUnchanged: s.zetaComputedN === beforeComputed,
+                rawUnchanged: s.zetaOffsetsRaw[99] === beforeRaw99,
+                offUnchanged: s.zetaOffsets[99] === beforeOff99,
+                targetUnchanged: s.targetPositions[99 * 3 + 2] === beforeTargetZ99,
+                progressHidden: wrap?.style.display === 'none',
+                progressText: text,
+            };
+        }, oldReqId);
+
+        expect(preRafResult).toEqual({
+            requestedN: 50,
+            afterPartialComputedUnchanged: true,
+            afterPartialRawUnchanged: true,
+            afterPartialHidden: true,
+            afterPartialText: '',
+            computedUnchanged: true,
+            rawUnchanged: true,
+            offUnchanged: true,
+            targetUnchanged: true,
+            progressHidden: true,
+            progressText: '',
+        });
+
+        // After the deferred rAF runs, N=50 must complete with exact N=50 values.
+        await expect.poll(async () => page.evaluate(() => {
+            const s = window.__APP_STATE__;
+            return s.zetaComputedN === 50 && !s.zetaComputing;
+        }), { timeout: 60_000 }).toBe(true);
+
+        const raw50 = await page.evaluate(() => window.__APP_STATE__.zetaOffsetsRaw[99]);
+        const expected50 = refRaw(100, 50);
+        expect(Math.abs(raw50 - expected50)).toBeLessThan(1e-4 * Math.max(1, Math.abs(expected50)));
+
+        // Also verify defense-in-depth in worker-client.js when state.zetaZeroCount diverges
+        // directly (without going through slider input) while a request is in flight.
+        await page.evaluate(() => { window.__zetaEvents = []; });
+        await setSlider(page, '#zeta-n-slider', 600);
+        await expect.poll(async () => page.evaluate(() => (
+            window.__zetaEvents.some(e => e.type === 'zeta_partial' && e.targetN === 600)
+        )), { timeout: 20_000, intervals: [50] }).toBe(true);
+
+        const activeReqId = await page.evaluate(() => (
+            window.__zetaEvents.find(e => e.type === 'zeta_partial' && e.targetN === 600).reqId
+        ));
+
+        const directDivergenceIgnored = await page.evaluate((reqId) => {
+            const s = window.__APP_STATE__;
+            const beforeComputed = s.zetaComputedN;
+            const beforeRaw99 = s.zetaOffsetsRaw[99];
+            const beforeOff99 = s.zetaOffsets[99];
+            s.zetaZeroCount = 50; // direct state mutation without bumping reqId
+            window.__workerOnMessage({
+                data: {
+                    type: 'zeta_partial',
+                    reqId,
+                    doneK: 80,
+                    targetN: 600,
+                    offsets: new Float32Array(s.MAX_POINTS).fill(4321),
+                    rawOffsets: new Float32Array(s.MAX_POINTS).fill(-4321),
+                },
+            });
+            return {
+                computedUnchanged: s.zetaComputedN === beforeComputed,
+                rawUnchanged: s.zetaOffsetsRaw[99] === beforeRaw99,
+                offUnchanged: s.zetaOffsets[99] === beforeOff99,
+            };
+        }, activeReqId);
+
+        expect(directDivergenceIgnored).toEqual({
+            computedUnchanged: true,
+            rawUnchanged: true,
+            offUnchanged: true,
+        });
     });
 
     test('sync fallback (D6=A) completes synchronously with no partial progress UI', async ({ page }) => {

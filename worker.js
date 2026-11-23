@@ -16,7 +16,9 @@ import {
 } from './shared/explicit-formula.js';
 
 const ZETA_CHUNK_K = 20;
-const ZETA_PARTIAL_INTERVAL_MS = 400; // D3: emit first chunk immediately, then every 350-450ms
+const ZETA_PARTIAL_MIN_MS = 350;       // D3 lower bound (350-450ms)
+const ZETA_PARTIAL_TARGET_MS = 390;    // Target interval inside D3 [350, 450]
+const ZETA_PARTIAL_MAX_SLICE_MS = 160; // Cap sub-steps so CPU jitter does not exceed 450ms
 
 const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
@@ -105,12 +107,16 @@ function emitZetaDone(reqId, amplitude, spacing, recomputed) {
 }
 
 // Emit intermediate zeta_partial snapshot with both offsets and rawOffsets (D3) so main-thread buffers stay consistent.
+// Returns { postedAt, buildMs } so the chunk loop can measure actual postMessage intervals and snapshot cost.
 function emitZetaPartial(reqId, doneK, targetN, amplitude, spacing) {
+    const t0 = nowMs();
     const { normalized, raw } = buildZetaTransferBuffers(amplitude, spacing);
+    const postedAt = nowMs();
     self.postMessage(
         { type: 'zeta_partial', reqId, doneK, targetN, offsets: normalized, rawOffsets: raw },
         [normalized.buffer, raw.buffer]
     );
+    return { postedAt, buildMs: Math.max(0, postedAt - t0) };
 }
 
 // Emit per-request work-relative progress (D4: (doneK - startK) / (targetN - startK) in 0..100).
@@ -170,38 +176,91 @@ function startZetaComputation(reqId, rawN, amplitude, spacing) {
     }
 
     // Chunked async path: preserve completed chunks in _zetaCache after each step.
-    const job = { reqId, startK, curK: startK, targetN: N, amplitude, spacing, S, timerId: null, lastPartialAt: null };
+    const job = {
+        reqId,
+        startK,
+        curK: startK,
+        targetN: N,
+        amplitude,
+        spacing,
+        S,
+        timerId: null,
+        lastPartialAt: null,
+        msPerZero: 0,
+        emitCostMs: 0,
+    };
     _zetaJob = job;
 
     // Emit initial 0% progress immediately so the UI shows feedback without waiting for chunk 1.
     emitZetaProgress(reqId, startK, startK, N);
     if (_zetaJob !== job) return;
 
+    const shouldEmitPartial = (now) => (
+        job.lastPartialAt === null || (now - job.lastPartialAt) >= ZETA_PARTIAL_MIN_MS
+    );
+
+    const pickSubStep = (chunkRem) => {
+        // First chunk runs full ZETA_CHUNK_K (D3: emit first chunk immediately) and calibrates msPerZero.
+        if (job.lastPartialAt === null || job.msPerZero <= 0) return chunkRem;
+        const elapsed = nowMs() - job.lastPartialAt;
+        const decisionTarget = Math.max(ZETA_PARTIAL_MIN_MS + 5, ZETA_PARTIAL_TARGET_MS - job.emitCostMs);
+        const remMs = decisionTarget - elapsed;
+        if (remMs <= job.msPerZero * 1.5) return 1;
+        const sliceBudgetMs = Math.min(ZETA_PARTIAL_MAX_SLICE_MS, remMs * 0.7);
+        const fitK = Math.floor(sliceBudgetMs / job.msPerZero);
+        return Math.max(1, Math.min(chunkRem, fitK));
+    };
+
+    const recordPartial = ({ postedAt, buildMs }) => {
+        job.lastPartialAt = postedAt;
+        job.emitCostMs = job.emitCostMs > 0 ? (job.emitCostMs * 0.5 + buildMs * 0.5) : buildMs;
+    };
+
     const runChunk = () => {
         if (_zetaJob !== job) return;
         job.timerId = null;
 
-        const kNext = Math.min(job.curK + ZETA_CHUNK_K, job.targetN);
-        accumulateZeroSumPsi(job.S, _lnCache, _sqrtCache, ZETA_ZEROS, _zetaDenom, job.curK, kNext);
-        job.curK = kNext;
+        const chunkEnd = Math.min(job.curK + ZETA_CHUNK_K, job.targetN);
+        while (job.curK < chunkEnd) {
+            const subK = pickSubStep(chunkEnd - job.curK);
+            const kNext = job.curK + subK;
+            const t0 = nowMs();
+            accumulateZeroSumPsi(job.S, _lnCache, _sqrtCache, ZETA_ZEROS, _zetaDenom, job.curK, kNext);
+            const dt = nowMs() - t0;
+            job.curK = kNext;
 
-        // Commit intermediate state immediately (raw: null prevents reusing stale Float32 buffers).
-        _zetaCache = { N: kNext, S: job.S, raw: null, maxAbs: 0 };
+            // Commit intermediate state immediately (raw: null prevents reusing stale Float32 buffers).
+            _zetaCache = { N: kNext, S: job.S, raw: null, maxAbs: 0 };
 
-        if (kNext < job.targetN) {
-            emitZetaProgress(job.reqId, job.startK, kNext, job.targetN);
-            if (_zetaJob !== job) return;
-            const now = nowMs();
-            if (job.lastPartialAt === null || (now - job.lastPartialAt) >= ZETA_PARTIAL_INTERVAL_MS) {
-                emitZetaPartial(job.reqId, kNext, job.targetN, job.amplitude, job.spacing);
-                job.lastPartialAt = nowMs();
-                if (_zetaJob !== job) return;
+            if (dt > 0) {
+                const sample = dt / subK;
+                job.msPerZero = job.msPerZero > 0 ? (job.msPerZero * 0.6 + sample * 0.4) : sample;
             }
-            job.timerId = setTimeout(runChunk, 0);
-        } else {
-            _zetaJob = null;
-            emitZetaDone(job.reqId, job.amplitude, job.spacing, true);
+
+            if (job.curK >= job.targetN) {
+                _zetaJob = null;
+                emitZetaDone(job.reqId, job.amplitude, job.spacing, true);
+                return;
+            }
+
+            // Check mid-chunk so real postMessage intervals stay within D3's 350-450ms window.
+            if (job.lastPartialAt !== null && shouldEmitPartial(nowMs())) {
+                emitZetaProgress(job.reqId, job.startK, job.curK, job.targetN);
+                if (_zetaJob !== job) return;
+                recordPartial(emitZetaPartial(job.reqId, job.curK, job.targetN, job.amplitude, job.spacing));
+                if (_zetaJob !== job) return;
+                job.timerId = setTimeout(runChunk, 0);
+                return;
+            }
         }
+
+        emitZetaProgress(job.reqId, job.startK, job.curK, job.targetN);
+        if (_zetaJob !== job) return;
+        if (shouldEmitPartial(nowMs())) {
+            recordPartial(emitZetaPartial(job.reqId, job.curK, job.targetN, job.amplitude, job.spacing));
+            if (_zetaJob !== job) return;
+        }
+        job.timerId = setTimeout(runChunk, 0);
     };
 
     job.timerId = setTimeout(runChunk, 0);

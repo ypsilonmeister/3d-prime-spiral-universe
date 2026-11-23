@@ -6,6 +6,7 @@ import { applyPositionOverlays } from '../render/lattice.js';
 import { updateParticleVisuals, clearAboveActive } from '../render/particles.js';
 import { toggleMode, onCountChange, isOverlayActive, rebuildPositions } from '../modes/mode-manager.js';
 import { computeZetaOffsets } from '../modes/zeta.js';
+import { cancelPendingZetaRequests } from '../worker-client.js';
 import { runZetaAnimation, stopZetaAnimation } from '../modes/zeta-anim.js';
 import { explicitMode } from '../modes/explicit.js';
 import { computePadicValuations, applyPadicPositions, updatePadicColorVisuals } from '../modes/padic.js';
@@ -177,8 +178,15 @@ export function bindUIEvents(enterVRCallback) {
     const zetaNSlider = getElement('zeta-n-slider');
     if (zetaNSlider) {
         zetaNSlider.addEventListener('input', (e) => {
-            state.zetaZeroCount = parseInt(e.target.value);
+            const nextN = parseInt(e.target.value);
+            const changed = nextN !== state.zetaZeroCount;
+            state.zetaZeroCount = nextN;
             getElement('zeta-n-val').innerText = state.zetaZeroCount;
+            // Invalidate any in-flight Zeta request immediately on N input so stale partials/progress
+            // cannot mutate state or UI during the window before rafThrottle fires.
+            if (changed && state.zetaModeActive && !state.explicitModeActive) {
+                cancelPendingZetaRequests();
+            }
             recomputeZeta(state.explicitModeActive);
         });
     }

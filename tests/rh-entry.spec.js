@@ -760,11 +760,21 @@ test.describe('RH 3-block explanation panel (PR 3)', () => {
 
     // Wording constraint & no duplication of left-panel HUD / scale note / legend explanations
     const cardText = await card.textContent();
-    for (const forbidden of ['証明済み', '実証', '成り立つことを示して', '必ずこの殻に収まる', '誤差がゼロ', 'N を増やすほど実測', 'N を増やすほど残差は小さく']) {
+    for (const forbidden of [
+      '証明済み',
+      '実証',
+      '成り立つことを示して',
+      '必ずこの殻に収まる',
+      '誤差がゼロ',
+      'N を増やすほど実測',
+      'N を増やすほど残差は小さく',
+      'N を増やすと全体として',
+    ]) {
       expect(cardText).not.toContain(forbidden);
     }
-    expect(cardText).toContain('全体として');
-    expect(cardText).toContain('局所的');
+    expect(cardText).toContain('N が大きいほど傾向として');
+    expect(cardText).toContain('N を 1 つ増やすごとに必ず誤差が小さくなるとは限らず');
+    expect(cardText).toContain('局所的にも全体の指標でも増えることがあります');
     expect(cardText).not.toContain('asinh');
     expect(cardText).not.toContain('中間サンプル');
     expect(cardText).not.toContain('最大サンプル');
@@ -793,9 +803,11 @@ test.describe('RH 3-block explanation panel (PR 3)', () => {
     await expect(page.locator('#rh-block-bound-title')).toContainText('ビュー B では非表示');
     await expect(page.locator('#rh-block-recon-title')).toContainText('ビュー B：打ち切り残差');
     const viewBReconText = await page.locator('#rh-block-recon-body').textContent();
-    expect(viewBReconText).toContain('全体として');
-    expect(viewBReconText).toContain('局所的');
+    expect(viewBReconText).toContain('N が大きいほど傾向として');
+    expect(viewBReconText).toContain('N を 1 つ増やすごとに必ず小さくなるとは限らず');
+    expect(viewBReconText).toContain('局所的にも全体の指標でも増えることがあります');
     expect(viewBReconText).not.toContain('N を増やすほど残差は小さく');
+    expect(viewBReconText).not.toContain('N を増やすと全体として');
     const viewBLegendText = await page.locator('#explicit-legend').textContent();
     expect(viewBLegendText).not.toContain('色＝残差');
 

@@ -758,14 +758,26 @@ test.describe('RH 3-block explanation panel (PR 3)', () => {
     await expect(page.locator('#rh-block-bound')).toContainText('面ではなく紫の輪郭線');
     await expect(page.locator('#rh-block-bound')).toContainText('リーマン予想の証明ではありません');
 
-    // Wording constraint & no duplication of left-panel HUD / scale note
+    // Wording constraint & no duplication of left-panel HUD / scale note / legend explanations
     const cardText = await card.textContent();
-    for (const forbidden of ['証明済み', '実証', '成り立つことを示して', '必ずこの殻に収まる', '誤差がゼロ']) {
+    for (const forbidden of ['証明済み', '実証', '成り立つことを示して', '必ずこの殻に収まる', '誤差がゼロ', 'N を増やすほど実測', 'N を増やすほど残差は小さく']) {
       expect(cardText).not.toContain(forbidden);
     }
+    expect(cardText).toContain('全体として');
+    expect(cardText).toContain('局所的');
     expect(cardText).not.toContain('asinh');
     expect(cardText).not.toContain('中間サンプル');
     expect(cardText).not.toContain('最大サンプル');
+
+    const legendText = await page.locator('#explicit-legend').textContent();
+    expect(legendText).toContain('残差 rung');
+    expect(legendText).toContain('誤差上限（RH を仮定した場合）');
+    expect(legendText).not.toContain('色＝残差');
+    expect(legendText).not.toContain('拡大表示');
+    expect(legendText).not.toContain('横木は残差');
+    expect(legendText).not.toContain('x ≥ 73.2');
+    await expect(page.locator('#explicit-scale-note')).toContainText('asinh');
+    await expect(page.locator('#explicit-hud')).toContainText('中間サンプル');
 
     // Kind switch (psi1 -> psi) syncs Block 1 & Block 3 formulas
     await page.locator('#explicit-kind-psi').click();
@@ -780,6 +792,12 @@ test.describe('RH 3-block explanation panel (PR 3)', () => {
     await expect(page.locator('#rh-block-measured-title')).toContainText('ビュー B では非表示');
     await expect(page.locator('#rh-block-bound-title')).toContainText('ビュー B では非表示');
     await expect(page.locator('#rh-block-recon-title')).toContainText('ビュー B：打ち切り残差');
+    const viewBReconText = await page.locator('#rh-block-recon-body').textContent();
+    expect(viewBReconText).toContain('全体として');
+    expect(viewBReconText).toContain('局所的');
+    expect(viewBReconText).not.toContain('N を増やすほど残差は小さく');
+    const viewBLegendText = await page.locator('#explicit-legend').textContent();
+    expect(viewBLegendText).not.toContain('色＝残差');
 
     await page.locator('#explicit-view-a').click();
     await expect(page.locator('#rh-block-measured')).not.toHaveClass(/rh-block-muted/);
@@ -879,6 +897,80 @@ test.describe('RH 3-block explanation panel (PR 3)', () => {
     // Manual toggle OFF hides the guide panel cleanly
     await page.locator('#group-explicit-toggle .toggle-row').click();
     await expect(panel).toBeHidden();
+    expect(errors).toEqual([]);
+  });
+
+  test('narrow viewport (390x844) starts collapsed as chip even on dedicated entry without covering controls', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = [];
+    page.on('pageerror', err => errors.push(err.message));
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/?mode=explicit&sweep=0', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+    await waitForExplicitSettled(page);
+
+    const panel = page.locator('#rh-guide-panel');
+    const card = page.locator('#rh-guide-card');
+    const openBtn = page.locator('#rh-guide-open-btn');
+    const collapseBtn = page.locator('#rh-guide-collapse-btn');
+
+    // Starts collapsed as chip on narrow viewport (<= 480px) even from dedicated entry
+    await expect(panel).toBeVisible();
+    await expect(openBtn).toBeVisible();
+    await expect(openBtn).toHaveText('解説を開く');
+    await expect(card).toBeHidden();
+    const initState = await page.evaluate(() => ({
+      visible: window.__APP_STATE__.rhGuideVisible,
+      collapsed: window.__APP_STATE__.rhGuideCollapsed,
+    }));
+    expect(initState).toEqual({ visible: true, collapsed: true });
+
+    // Chip does not overlap #ui-overlay and left controls receive pointer hits directly
+    const layout = await page.evaluate(() => {
+      const ui = document.getElementById('ui-overlay');
+      const uiRect = ui.getBoundingClientRect();
+      const chipRect = document.getElementById('rh-guide-open-btn').getBoundingClientRect();
+      const overlapW = Math.max(0, Math.min(uiRect.right, chipRect.right) - Math.max(uiRect.left, chipRect.left));
+      const overlapH = Math.max(0, Math.min(uiRect.bottom, chipRect.bottom) - Math.max(uiRect.top, chipRect.top));
+
+      const slider = document.getElementById('zeta-n-slider');
+      slider.scrollIntoView({ block: 'center' });
+      const sRect = slider.getBoundingClientRect();
+      const sliderHit = document.elementFromPoint(sRect.left + sRect.width / 2, sRect.top + sRect.height / 2);
+
+      const viewB = document.getElementById('explicit-view-b');
+      viewB.scrollIntoView({ block: 'center' });
+      const vRect = viewB.getBoundingClientRect();
+      const viewBHit = document.elementFromPoint(vRect.left + vRect.width / 2, vRect.top + vRect.height / 2);
+
+      return {
+        overlapArea: overlapW * overlapH,
+        sliderCoveredByGuide: Boolean(sliderHit && sliderHit.closest('#rh-guide-panel')),
+        viewBCoveredByGuide: Boolean(viewBHit && viewBHit.closest('#rh-guide-panel')),
+        sliderHitInsideUi: Boolean(sliderHit && sliderHit.closest('#ui-overlay')),
+        viewBHitInsideUi: Boolean(viewBHit && viewBHit.closest('#ui-overlay')),
+      };
+    });
+    expect(layout).toEqual({
+      overlapArea: 0,
+      sliderCoveredByGuide: false,
+      viewBCoveredByGuide: false,
+      sliderHitInsideUi: true,
+      viewBHitInsideUi: true,
+    });
+
+    // Left controls are directly usable without collapsing anything first
+    await page.locator('#explicit-view-b').click();
+    await expect(page.locator('#explicit-view-b')).toHaveClass(/active/);
+
+    // User can still expand and re-collapse the guide card from the chip
+    await openBtn.click();
+    await expect(card).toBeVisible();
+    await expect(openBtn).toBeHidden();
+    await collapseBtn.click();
+    await expect(card).toBeHidden();
+    await expect(openBtn).toBeVisible();
     expect(errors).toEqual([]);
   });
 });

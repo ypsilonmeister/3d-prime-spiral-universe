@@ -263,8 +263,8 @@ function syncRhGuidePanel(kind, view) {
     const reconBody = document.getElementById('rh-block-recon-body');
     if (reconBody) {
         reconBody.textContent = isViewB
-            ? '実測と N 個の零点による再構成の差（打ち切り残差）を直接描いたオレンジ〜赤のリボンです。N を増やすほど残差は小さくなり、帯の色は残差が大きいほど赤く染まります。'
-            : 'リーマンゼータ関数の非自明な零点を低い方から N 個だけ重ねたオレンジのリボンです。N を増やすほど実測（シアン線）へ近づき、帯の色は残差が大きいほど赤くなります。シアン線との間を結ぶ白い残差 rung（横木）は残差を拡大表示した目印です。';
+            ? '実測と N 個の零点による再構成の差（打ち切り残差）を直接描いたオレンジ〜赤のリボンです。局所的に増える箇所はあるものの、N を増やすと全体として残差は小さくなっていき、帯の色は残差が大きいほど赤く染まります。'
+            : 'リーマンゼータ関数の非自明な零点を低い方から N 個だけ重ねたオレンジのリボンです。局所的な増減はあるものの、N を増やすと全体として実測（シアン線）へ近づいていき、帯の色は残差が大きいほど赤くなります。シアン線との間を結ぶ白い残差 rung（横木）は、実測と再構成の差を拡大表示した目印です。';
     }
 
     const boundBlock = document.getElementById('rh-block-bound');
@@ -317,20 +317,20 @@ function renderExplicitPanel() {
     const legRibbon = document.getElementById('explicit-legend-ribbon');
     if (legRibbon) {
         legRibbon.innerHTML = isViewB
-            ? '<span style="color:#ffaa33" aria-hidden="true">━</span> 打ち切り残差（実測 − 再構成）（色＝残差の大きさ）'
-            : '<span style="color:#ffaa33" aria-hidden="true">━</span> N 個の零点による再構成（色＝残差の大きさ）';
+            ? '<span style="color:#ffaa33" aria-hidden="true">━</span> 打ち切り残差（実測 − 再構成）'
+            : '<span style="color:#ffaa33" aria-hidden="true">━</span> N 個の零点による再構成';
     }
     const legRungs = document.getElementById('explicit-legend-rungs');
     if (legRungs) {
         legRungs.hidden = isViewB;
-        legRungs.innerHTML = '<span style="color:#eef4ff" aria-hidden="true">│</span> 残差 rung（実測と再構成の差。横木は残差を拡大表示）';
+        legRungs.innerHTML = '<span style="color:#eef4ff" aria-hidden="true">│</span> 残差 rung';
     }
     const legShell = document.getElementById('explicit-legend-shell');
     if (legShell) {
         legShell.style.opacity = isViewB ? '0.45' : '1';
         legShell.innerHTML = isViewB
-            ? `<span style="color:#8866ff" aria-hidden="true">◯</span> 誤差上限（RH を仮定した場合）±${boundSym}：ビュー B では自動非表示（上限は真のゆらぎ用）`
-            : `<span style="color:#8866ff" aria-hidden="true">◯</span> 誤差上限（RH を仮定した場合）±${boundSym}、x ≥ 73.2`;
+            ? `<span style="color:#8866ff" aria-hidden="true">◯</span> 誤差上限（RH を仮定した場合）±${boundSym}（ビュー B 非表示）`
+            : `<span style="color:#8866ff" aria-hidden="true">◯</span> 誤差上限（RH を仮定した場合）±${boundSym}`;
     }
 
     const scaleNote = document.getElementById('explicit-scale-note');
@@ -812,6 +812,16 @@ onWorkerFailure(() => {
     }
 });
 
+const RH_GUIDE_NARROW_MAX_WIDTH = 480;
+
+function isNarrowViewport() {
+    if (typeof window === 'undefined') return false;
+    if (typeof window.matchMedia === 'function') {
+        return window.matchMedia(`(max-width: ${RH_GUIDE_NARROW_MAX_WIDTH}px)`).matches;
+    }
+    return typeof window.innerWidth === 'number' && window.innerWidth <= RH_GUIDE_NARROW_MAX_WIDTH;
+}
+
 export const explicitMode = {
     id: 'explicit',
     kind: 'owner',
@@ -819,7 +829,7 @@ export const explicitMode = {
         state.explicitModeActive = true;
         launchedFromUrl = Boolean(opts && opts.fromLaunch);
         state.rhGuideVisible = true;
-        state.rhGuideCollapsed = !launchedFromUrl;
+        state.rhGuideCollapsed = !launchedFromUrl || isNarrowViewport();
         const shouldAutoSweep = Boolean(opts && opts.autoSweep);
         const sweepDelayMs = (opts && typeof opts.sweepDelayMs === 'number')
             ? opts.sweepDelayMs

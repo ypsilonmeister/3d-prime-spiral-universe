@@ -37,6 +37,7 @@ const TUBE_SEGMENTS = 24, SHELL_RING_INTERVAL = 24, RIBBON_HALF_WIDTH = 28;
 const SHELL_COLOR = 0x8866ff, SHELL_OPACITY = 0.35;
 const RUNG_TARGET_COUNT = 100, RUNG_COLOR = 0xeef4ff, RUNG_OPACITY = 0.6;
 const RUNG_RADIUS = 8, RUNG_RADIAL_SEGMENTS = 8;
+const RUNG_LENGTH_SCALE = 40, RUNG_MAX_LENGTH = 200; // visual-only length magnification (half-length <= 100 stays within shell)
 const RUNG_UP = new THREE.Vector3(0, 1, 0);
 const RENDER_ORDER_AXIS = 0;
 const RENDER_ORDER_SHELL = 1;
@@ -272,7 +273,7 @@ function renderExplicitPanel() {
     const legRungs = document.getElementById('explicit-legend-rungs');
     if (legRungs) {
         legRungs.hidden = isViewB;
-        legRungs.innerHTML = '<span style="color:#eef4ff" aria-hidden="true">│</span> 残差 rung（実測と再構成の差）';
+        legRungs.innerHTML = '<span style="color:#eef4ff" aria-hidden="true">│</span> 残差 rung（実測と再構成の差。横木は残差を拡大表示）';
     }
     const legShell = document.getElementById('explicit-legend-shell');
     if (legShell) {
@@ -566,8 +567,9 @@ function updateRibbon(recon, residual) {
     }
 }
 
-// Residual rungs (View A only): thin 3D cylinders (InstancedMesh) linking measured and reconstructed curves
-// at fixed sample intervals so convergence with increasing N is directly legible from the default viewpoint.
+// Residual rungs (View A only): thin 3D cylinders (InstancedMesh) placed at fixed sample intervals along
+// the residual direction. Only the rung glyph length is magnified (scale + cap) for default-view legibility;
+// curve positions and numeric data remain untouched.
 function updateRungs(recon) {
     const c = cache, indices = c.rungIndices, count = indices.length;
     let rungs = group.getObjectByName('explicit-rungs');
@@ -599,10 +601,11 @@ function updateRungs(recon) {
         const f = c.frames[i];
         const dMeas = c.dMeas[i];
         const dRecon = compressedOffset(recon[i], c.xs[i], c.yRef, AMP, c.kind);
-        const len = Math.abs(dRecon - dMeas);
+        const rawLen = Math.abs(dRecon - dMeas);
+        const displayLen = Math.min(rawLen * RUNG_LENGTH_SCALE, RUNG_MAX_LENGTH);
         pos.copy(f.P).addScaledVector(f.n, 0.5 * (dMeas + dRecon));
         quat.setFromUnitVectors(RUNG_UP, f.n);
-        scale.set(1, Math.max(len, 1e-6), 1);
+        scale.set(1, Math.max(displayLen, 1e-6), 1);
         mat4.compose(pos, quat, scale);
         rungs.setMatrixAt(k, mat4);
     }

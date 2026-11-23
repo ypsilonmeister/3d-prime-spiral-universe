@@ -1274,28 +1274,54 @@ test.describe('explicit formula mode', () => {
     expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo['explicit-ribbon'].renderOrder);
     expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo['explicit-rungs'].renderOrder);
 
-    // 2. Measure rung length (from InstancedMesh matrices) and default-view pixel diff across N = 10 -> 100 -> 1000
+    // Legend notes that residual rungs are magnified in View A
+    await expect(page.locator('#explicit-legend-rungs')).toBeVisible();
+    await expect(page.locator('#explicit-legend-rungs')).toContainText('横木は残差を拡大表示');
+
+    // 2. Measure rung length (3D + projected px at default camera) and default-view pixel diff across N = 10 -> 100 -> 1000
     const measureRungs = () => page.evaluate(async () => {
       const THREE = await import('three');
       const s = window.__APP_STATE__;
       const rungs = s.scene.getObjectByName('explicit-rungs');
       const count = rungs.count;
+      const renderer = s.renderer;
+      const viewSize = new THREE.Vector2();
+      renderer.getSize(viewSize);
+      rungs.updateWorldMatrix(true, false);
+      s.camera.updateMatrixWorld(true);
+      s.camera.updateProjectionMatrix();
+
       const mat4 = new THREE.Matrix4();
+      const worldMat = new THREE.Matrix4();
       const pos = new THREE.Vector3();
       const quat = new THREE.Quaternion();
       const scale = new THREE.Vector3();
+      const halfAxis = new THREE.Vector3();
+      const p0 = new THREE.Vector3();
+      const p1 = new THREE.Vector3();
       let sum = 0;
       let max = 0;
+      let sumProjPx = 0;
+      let maxProjPx = 0;
       for (let k = 0; k < count; k++) {
         rungs.getMatrixAt(k, mat4);
-        mat4.decompose(pos, quat, scale);
+        worldMat.multiplyMatrices(rungs.matrixWorld, mat4);
+        worldMat.decompose(pos, quat, scale);
         const len = scale.y;
         sum += len;
         if (len > max) max = len;
+
+        halfAxis.set(0, 0.5 * len, 0).applyQuaternion(quat);
+        p0.copy(pos).sub(halfAxis).project(s.camera);
+        p1.copy(pos).add(halfAxis).project(s.camera);
+        const dx = (p1.x - p0.x) * 0.5 * viewSize.x;
+        const dy = (p1.y - p0.y) * 0.5 * viewSize.y;
+        const projPx = Math.hypot(dx, dy);
+        sumProjPx += projPx;
+        if (projPx > maxProjPx) maxProjPx = projPx;
       }
 
-      // Render-toggle pixel diff at fixed default camera (same methodology as review #17)
-      const renderer = s.renderer;
+      // Render-toggle pixel diff at fixed default camera (same methodology as review #17/#19)
       const gl = renderer.getContext();
       const w = gl.drawingBufferWidth;
       const h = gl.drawingBufferHeight;
@@ -1326,6 +1352,8 @@ test.describe('explicit formula mode', () => {
         geomUuid: rungs.geometry.uuid,
         meanLen: sum / count,
         maxLen: max,
+        meanProjPx: sumProjPx / count,
+        maxProjPx,
         diffPixels,
         restoreDiff,
         glError: gl.getError(),
@@ -1342,12 +1370,24 @@ test.describe('explicit formula mode', () => {
       expect(rungStats[n].restoreDiff).toBe(0);
       expect(rungStats[n].glError).toBe(0);
     }
-    console.log('Residual rung stats (length & default-view diffPixels):', JSON.stringify(rungStats));
+    console.log('Residual rung stats (length, projected px & default-view diffPixels):', JSON.stringify(rungStats));
     expect(rungStats[10].geomUuid).toBe(rungStats[100].geomUuid);
     expect(rungStats[100].geomUuid).toBe(rungStats[1000].geomUuid);
+    // 3D display length: capped within shell bounds and monotonically decreasing
+    expect(rungStats[10].maxLen).toBeLessThanOrEqual(200);
     expect(rungStats[10].meanLen).toBeGreaterThan(rungStats[100].meanLen);
     expect(rungStats[100].meanLen).toBeGreaterThan(rungStats[1000].meanLen);
     expect(rungStats[1000].meanLen).toBeGreaterThan(0);
+    // Projected length at default camera: clearly legible as lines at N=10 (several+ px),
+    // monotonically shortening across N=10 -> 100 -> 1000, down to short stubs at N=1000
+    expect(rungStats[10].maxProjPx).toBeGreaterThanOrEqual(5);
+    expect(rungStats[10].meanProjPx).toBeGreaterThan(rungStats[100].meanProjPx);
+    expect(rungStats[100].meanProjPx).toBeGreaterThan(rungStats[1000].meanProjPx);
+    expect(rungStats[1000].meanProjPx).toBeGreaterThan(0);
+    expect(rungStats[10].maxProjPx).toBeGreaterThan(rungStats[100].maxProjPx);
+    expect(rungStats[100].maxProjPx).toBeGreaterThan(rungStats[1000].maxProjPx);
+    expect(rungStats[1000].maxProjPx).toBeLessThan(2);
+    expect(rungStats[10].diffPixels).toBeGreaterThan(rungStats[1000].diffPixels);
 
     // 3. Sweep playback also updates rungs in-place (N=0 -> 1000) and shortens them by completion
     await setN(page, 0);

@@ -1,9 +1,10 @@
 // Explicit-formula mode plugin (owner): psi1(x) - x^2/2 (default) or psi(x) - x on a log-spaced conical spiral.
 // View A draws (all through the same two-stage compression, see shared/explicit-formula.js compressedOffset):
 //   grey axis, measured curve (cyan), N-zero reconstruction ribbon (warm, vertex colour = residual),
-//   and the shell +-B(x) (Schoenfeld bound; RH ASSUMED, x >= 73.2 only) with a boundary ring at x = 73.2.
+//   residual rungs connecting measured and reconstructed curves at fixed sample intervals,
+//   and the outline shell +-B(x) (Schoenfeld bound; RH ASSUMED, x >= 73.2 only) with a boundary ring at x = 73.2.
 // View B draws only the reference axis and the truncation-residual ribbon (measured - reconstructed) and hides
-// the RH error shell automatically (the bound applies to the true fluctuation, not to the truncation residual).
+// the RH error shell and rungs automatically (the bound applies to the true fluctuation, not to the truncation residual).
 // All math is delegated to shared/explicit-formula.js; this file only maps numbers to geometry and HUD text.
 
 import * as THREE from 'three';
@@ -32,7 +33,16 @@ import {
 export const EXPLICIT_SAMPLES = 1600;
 export const EXPLICIT_SAMPLES_FALLBACK = 400;
 const TURNS = 6, R0 = 600, R1 = 2200, H = 1300, AMP = 220;
-const TUBE_SEGMENTS = 16, RIBBON_HALF_WIDTH = 28;
+const TUBE_SEGMENTS = 24, SHELL_RING_INTERVAL = 24, RIBBON_HALF_WIDTH = 28;
+const SHELL_COLOR = 0x8866ff, SHELL_OPACITY = 0.35;
+const RUNG_TARGET_COUNT = 100, RUNG_COLOR = 0xffd2a6, RUNG_OPACITY = 0.5;
+const RENDER_ORDER_AXIS = 0;
+const RENDER_ORDER_SHELL = 1;
+const RENDER_ORDER_RING = 2;
+const RENDER_ORDER_PRIMES = 2;
+const RENDER_ORDER_RUNGS = 3;
+const RENDER_ORDER_RIBBON = 10;
+const RENDER_ORDER_MEASURED = 11;
 const RESIDUAL_FULL = 0.25 * AMP; // residual (display units) mapped to the "hot" colour
 const DEFAULT_N = 100;
 const COL_BASE = new THREE.Color(0xffaa33), COL_HOT = new THREE.Color(0xff2d55);
@@ -143,6 +153,8 @@ function applyViewVisibility() {
     if (shellObj) shellObj.visible = showA;
     const ringObj = group.getObjectByName('explicit-boundary-ring');
     if (ringObj) ringObj.visible = showA;
+    const rungsObj = group.getObjectByName('explicit-rungs');
+    if (rungsObj) rungsObj.visible = showA;
 }
 
 function applyPrimesVisibility() {
@@ -224,6 +236,11 @@ function renderExplicitPanel() {
         legRibbon.innerHTML = isViewB
             ? '<span style="color:#ffaa33" aria-hidden="true">━</span> 打ち切り残差（実測 − 再構成）（色＝残差の大きさ）'
             : '<span style="color:#ffaa33" aria-hidden="true">━</span> N 個の零点による再構成（色＝残差の大きさ）';
+    }
+    const legRungs = document.getElementById('explicit-legend-rungs');
+    if (legRungs) {
+        legRungs.style.opacity = isViewB ? '0.4' : '1';
+        legRungs.innerHTML = `<span style="color:#ffd2a6" aria-hidden="true">│</span> 残差 rung（実測と再構成の差）${isViewB ? '（ビュー B 非表示）' : ''}`;
     }
     const legShell = document.getElementById('explicit-legend-shell');
     if (legShell) {
@@ -317,6 +334,7 @@ function buildPrimeMarkers(xMax, uOf) {
     });
     const pts = new THREE.Points(g, m);
     pts.name = 'explicit-primes';
+    pts.renderOrder = RENDER_ORDER_PRIMES;
     pts.visible = !!state.explicitShowPrimes;
     return { points: pts, count };
 }
@@ -348,17 +366,22 @@ function buildStaticGeometry(base, xMax, M, kind) {
         mpos[i * 3] = q.x; mpos[i * 3 + 1] = q.y; mpos[i * 3 + 2] = q.z;
     }
 
-    const line = (pos, color, opacity = 1) => {
+    const line = (pos, color, opacity = 1, renderOrder = 0) => {
         const g = new THREE.BufferGeometry();
         g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        return new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity }));
+        const obj = new THREE.Line(g, new THREE.LineBasicMaterial({
+            color, transparent: true, opacity, depthWrite: false,
+        }));
+        obj.renderOrder = renderOrder;
+        return obj;
     };
-    const axisLine = line(axis, 0x777777, 0.8); axisLine.name = 'explicit-axis';
-    const measLine = line(mpos, 0x00f2ff); measLine.name = 'explicit-measured';
+    const axisLine = line(axis, 0x777777, 0.8, RENDER_ORDER_AXIS); axisLine.name = 'explicit-axis';
+    const measLine = line(mpos, 0x00f2ff, 1, RENDER_ORDER_MEASURED); measLine.name = 'explicit-measured';
     const primeMarkers = buildPrimeMarkers(xMax, uOf);
     group.add(axisLine, measLine, primeMarkers.points);
 
-    // Shell: rings at x = 73.2 (boundary) and every sample with x > 73.2.
+    // Outline shell (+-B(x)): upper & lower boundary lines + spaced rings (no translucent tube surface),
+    // with the boundary ring at x = 73.2 preserved as a distinct LineLoop.
     let shell = null;
     if (hasShell) {
         const shellX = [SCHOENFELD_X0], shellD = [compressedOffset(boundAtX0, SCHOENFELD_X0, yRef, AMP, kind)];
@@ -371,40 +394,91 @@ function buildStaticGeometry(base, xMax, M, kind) {
             }
         }
         const R = shellX.length, S = TUBE_SEGMENTS;
-        const pos = new Float32Array(R * S * 3);
-        for (let j = 0; j < R; j++) {
-            const f = shellF[j], d = shellD[j];
-            for (let k = 0; k < S; k++) {
-                const a = 2 * Math.PI * k / S;
-                const q = f.P.clone().addScaledVector(f.n, d * Math.cos(a)).addScaledVector(f.b, d * Math.sin(a));
-                const o = (j * S + k) * 3;
-                pos[o] = q.x; pos[o + 1] = q.y; pos[o + 2] = q.z;
+        const ringIndices = [];
+        if (R > 1) {
+            const ringStep = Math.max(1, Math.round((R - 1) / SHELL_RING_INTERVAL));
+            for (let j = ringStep; j < R; j += ringStep) ringIndices.push(j);
+            if (ringIndices.length === 0 || ringIndices[ringIndices.length - 1] !== R - 1) {
+                ringIndices.push(R - 1);
             }
         }
-        const idx = [];
-        for (let j = 0; j < R - 1; j++) for (let k = 0; k < S; k++) {
-            const a = j * S + k, b = j * S + (k + 1) % S, c = (j + 1) * S + k, d = (j + 1) * S + (k + 1) % S;
-            idx.push(a, c, b, b, c, d);
+
+        // LineSegments buffer: 2 * (R - 1) segments for upper (+n) and lower (-n) boundaries
+        // plus ringIndices.length * S segments for spaced cross-section rings.
+        const segCount = Math.max(0, R - 1) * 2 + ringIndices.length * S;
+        const pos = new Float32Array(segCount * 2 * 3);
+        let o = 0;
+        const q0 = new THREE.Vector3(), q1 = new THREE.Vector3();
+        const pushSeg = (a, b) => {
+            pos[o++] = a.x; pos[o++] = a.y; pos[o++] = a.z;
+            pos[o++] = b.x; pos[o++] = b.y; pos[o++] = b.z;
+        };
+
+        for (let j = 0; j < R - 1; j++) {
+            const f0 = shellF[j], d0 = shellD[j];
+            const f1 = shellF[j + 1], d1 = shellD[j + 1];
+            q0.copy(f0.P).addScaledVector(f0.n, d0);
+            q1.copy(f1.P).addScaledVector(f1.n, d1);
+            pushSeg(q0, q1);
+            q0.copy(f0.P).addScaledVector(f0.n, -d0);
+            q1.copy(f1.P).addScaledVector(f1.n, -d1);
+            pushSeg(q0, q1);
         }
+
+        for (const j of ringIndices) {
+            const f = shellF[j], d = shellD[j];
+            for (let k = 0; k < S; k++) {
+                const a0 = 2 * Math.PI * k / S;
+                const a1 = 2 * Math.PI * ((k + 1) % S) / S;
+                q0.copy(f.P).addScaledVector(f.n, d * Math.cos(a0)).addScaledVector(f.b, d * Math.sin(a0));
+                q1.copy(f.P).addScaledVector(f.n, d * Math.cos(a1)).addScaledVector(f.b, d * Math.sin(a1));
+                pushSeg(q0, q1);
+            }
+        }
+
         const g = new THREE.BufferGeometry();
         g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-        g.setIndex(idx);
-        const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
-            color: 0x8866ff, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false,
+        const shellLines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+            color: SHELL_COLOR, transparent: true, opacity: SHELL_OPACITY, depthWrite: false,
         }));
-        mesh.name = 'explicit-shell';
-        // Boundary ring at x = 73.2: the first ring of the tube, drawn as an opaque loop.
-        const ringPos = pos.slice(0, S * 3);
+        shellLines.name = 'explicit-shell';
+        shellLines.renderOrder = RENDER_ORDER_SHELL;
+
+        // Boundary ring at x = 73.2: drawn as a crisp white loop.
+        const ringPos = new Float32Array(S * 3);
+        const f0 = shellF[0], d0 = shellD[0];
+        for (let k = 0; k < S; k++) {
+            const a = 2 * Math.PI * k / S;
+            q0.copy(f0.P).addScaledVector(f0.n, d0 * Math.cos(a)).addScaledVector(f0.b, d0 * Math.sin(a));
+            ringPos[k * 3] = q0.x; ringPos[k * 3 + 1] = q0.y; ringPos[k * 3 + 2] = q0.z;
+        }
         const rg = new THREE.BufferGeometry();
         rg.setAttribute('position', new THREE.BufferAttribute(ringPos, 3));
-        const ring = new THREE.LineLoop(rg, new THREE.LineBasicMaterial({ color: 0xffffff }));
+        const ring = new THREE.LineLoop(rg, new THREE.LineBasicMaterial({
+            color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false,
+        }));
         ring.name = 'explicit-boundary-ring';
-        group.add(mesh, ring);
-        shell = { shellX: Float64Array.from(shellX), rings: R, segments: S };
+        ring.renderOrder = RENDER_ORDER_RING;
+        group.add(shellLines, ring);
+        shell = {
+            shellX: Float64Array.from(shellX),
+            samples: R,
+            rings: ringIndices.length,
+            ringIndices,
+            segments: S,
+            style: 'outline',
+        };
     }
+
+    // Fixed sample indices for View A residual rungs connecting measured and reconstructed curves.
+    const rungStride = Math.max(1, Math.round(M / RUNG_TARGET_COUNT));
+    const rungIndices = [];
+    for (let i = 0; i < M; i += rungStride) rungIndices.push(i);
+    if (rungIndices[rungIndices.length - 1] !== M - 1) rungIndices.push(M - 1);
+
     applyViewVisibility();
     applyPrimesVisibility();
-    return { frames, dMeas, yRef, shell, primeCount: primeMarkers.count };
+    return { frames, dMeas, yRef, shell, rungIndices, primeCount: primeMarkers.count };
 }
 
 // Ribbon along the base curve:
@@ -445,14 +519,64 @@ function updateRibbon(recon, residual) {
         g.setAttribute('color', new THREE.BufferAttribute(col, 3));
         g.setIndex(idx);
         g.computeBoundingSphere();
-        const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide }));
+        const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+            vertexColors: true,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 1,
+            depthWrite: true,
+            depthTest: true,
+            polygonOffset: true,
+            polygonOffsetFactor: 1,
+            polygonOffsetUnits: 1,
+        }));
         mesh.name = 'explicit-ribbon';
+        mesh.renderOrder = RENDER_ORDER_RIBBON;
         group.add(mesh);
     } else {
         geom.geometry.attributes.position.needsUpdate = true;
         geom.geometry.attributes.color.needsUpdate = true;
         geom.geometry.computeBoundingSphere();
         if (geom.geometry.boundingBox) geom.geometry.computeBoundingBox();
+    }
+}
+
+// Residual rungs (View A only): thin line segments linking measured and reconstructed curves
+// at fixed sample intervals so convergence with increasing N is directly legible.
+function updateRungs(recon) {
+    const c = cache, indices = c.rungIndices, count = indices.length;
+    let rungs = group.getObjectByName('explicit-rungs');
+    const first = !rungs;
+    const pos = first ? new Float32Array(count * 2 * 3) : rungs.geometry.attributes.position.array;
+    const qMeas = new THREE.Vector3(), qRecon = new THREE.Vector3();
+    for (let k = 0; k < count; k++) {
+        const i = indices[k];
+        const f = c.frames[i];
+        const dRecon = compressedOffset(recon[i], c.xs[i], c.yRef, AMP, c.kind);
+        qMeas.copy(f.P).addScaledVector(f.n, c.dMeas[i]);
+        qRecon.copy(f.P).addScaledVector(f.n, dRecon);
+        const o = k * 6;
+        pos[o] = qMeas.x;     pos[o + 1] = qMeas.y;     pos[o + 2] = qMeas.z;
+        pos[o + 3] = qRecon.x; pos[o + 4] = qRecon.y; pos[o + 5] = qRecon.z;
+    }
+    if (first) {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+        g.computeBoundingSphere();
+        rungs = new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+            color: RUNG_COLOR,
+            transparent: true,
+            opacity: RUNG_OPACITY,
+            depthWrite: false,
+        }));
+        rungs.name = 'explicit-rungs';
+        rungs.renderOrder = RENDER_ORDER_RUNGS;
+        rungs.visible = currentView() === 'a';
+        group.add(rungs);
+    } else {
+        rungs.geometry.attributes.position.needsUpdate = true;
+        rungs.geometry.computeBoundingSphere();
+        if (rungs.geometry.boundingBox) rungs.geometry.computeBoundingBox();
     }
 }
 
@@ -470,6 +594,7 @@ function applyRecon(recon, N, myToken, myReconToken) {
     cache.residual = residual;
     cache.N = N;
     updateRibbon(recon, residual);
+    updateRungs(recon);
     const hud = computeExplicitHud(cache.xs, cache.meas, recon, cache.bound, residual);
     reconSeq++;
     publish({

@@ -45,7 +45,7 @@ test.describe('explicit formula mode', () => {
       return { pointsVisible: s.points.visible, names, glError: gl.getError(), M: s.explicitInfo.M };
     });
     expect(r.pointsVisible).toBe(false);
-    expect(r.names).toEqual(['explicit-axis', 'explicit-boundary-ring', 'explicit-measured', 'explicit-primes', 'explicit-ribbon', 'explicit-shell']);
+    expect(r.names).toEqual(['explicit-axis', 'explicit-boundary-ring', 'explicit-measured', 'explicit-primes', 'explicit-ribbon', 'explicit-rungs', 'explicit-shell']);
     expect(r.glError).toBe(0);
     expect(r.M).toBe(1600);
     await expect(page.locator('#explicit-controls')).toContainText('誤差上限（RH を仮定した場合）');
@@ -73,24 +73,43 @@ test.describe('explicit formula mode', () => {
     expect(rms[100]).toBeGreaterThan(rms[1000]);
   });
 
-  test('no shell vertex below x = 73.2; boundary ring sits at 73.2', async ({ page }) => {
+  test('no shell vertex below x = 73.2; outline shell has upper/lower boundaries + spaced rings and boundary ring at 73.2', async ({ page }) => {
     test.setTimeout(120_000);
     await boot(page);
     await enter(page);
     await expect.poll(async () => { const i = await info(page); return i && i.N != null; }, { timeout: 30_000 }).toBe(true);
     const r = await page.evaluate(() => {
       const s = window.__APP_STATE__;
-      const mesh = s.scene.getObjectByName('explicit-shell');
+      const shellObj = s.scene.getObjectByName('explicit-shell');
+      const ringObj = s.scene.getObjectByName('explicit-boundary-ring');
       const xs = s.explicitInfo.shellX;
       return {
-        minX: Math.min(...xs), rings: xs.length, seg: s.explicitInfo.shell.segments,
-        verts: mesh.geometry.attributes.position.count,
+        isLineSegments: shellObj.isLineSegments === true,
+        isMesh: shellObj.isMesh === true,
+        ringIsLineLoop: ringObj.isLineLoop === true,
+        ringVerts: ringObj.geometry.attributes.position.count,
+        style: s.explicitInfo.shell.style,
+        minX: Math.min(...xs),
+        samples: s.explicitInfo.shell.samples,
+        rings: s.explicitInfo.shell.rings,
+        seg: s.explicitInfo.shell.segments,
+        verts: shellObj.geometry.attributes.position.count,
+        colorHex: shellObj.material.color.getHex(),
         measuredBelow: s.explicitInfo.samples, // samples incl. x<73.2 exist for measured curve
       };
     });
+    expect(r.isLineSegments).toBe(true);
+    expect(r.isMesh).toBe(false);
+    expect(r.ringIsLineLoop).toBe(true);
+    expect(r.ringVerts).toBe(r.seg);
+    expect(r.style).toBe('outline');
+    expect(r.colorHex).toBe(0x8866ff);
     expect(r.minX).toBeGreaterThanOrEqual(73.2);
     expect(r.minX).toBe(73.2);
-    expect(r.verts).toBe(r.rings * r.seg); // every shell vertex belongs to a ring with x >= 73.2
+    expect(r.rings).toBeGreaterThan(0);
+    expect(r.rings).toBeLessThan(r.samples); // spaced rings, not a solid tube
+    // Upper/lower boundary segments + spaced ring segments, all built strictly from x >= 73.2
+    expect(r.verts).toBe(2 * (2 * (r.samples - 1) + r.rings * r.seg));
     expect(r.measuredBelow).toBe(1600);
   });
 
@@ -206,7 +225,7 @@ test.describe('explicit formula mode', () => {
       { timeout: 30_000 }).toBe(true);
     await expect(page.locator('#explicit-status')).toHaveText('(fallback mode: reduced samples)');
     const n = await page.evaluate(() => window.__APP_STATE__.scene.getObjectByName('explicit-group').children.length);
-    expect(n).toBe(6);
+    expect(n).toBe(7);
     await setN(page, 50); // still interactive afterwards
   });
   // ---- review #291 regressions -------------------------------------------
@@ -452,16 +471,18 @@ test.describe('explicit formula mode', () => {
     expect(viewA1.byName['explicit-shell'].visible).toBe(true);
     expect(viewA1.byName['explicit-boundary-ring'].visible).toBe(true);
     expect(viewA1.byName['explicit-measured'].visible).toBe(true);
+    expect(viewA1.byName['explicit-rungs'].visible).toBe(true);
     expect(viewA1.byName['explicit-ribbon'].visible).toBe(true);
     expect(viewA1.shellVisibleInfo).toBe(true);
 
-    // Switch to View B (residual only): shell, boundary ring, and measured curve hide automatically
+    // Switch to View B (residual only): shell, boundary ring, rungs, and measured curve hide automatically
     await page.locator('#explicit-view-b').click();
     await expect(page.locator('#explicit-view-b')).toHaveAttribute('aria-pressed', 'true');
     const viewB1 = await snapshot();
     expect(viewB1.byName['explicit-shell'].visible).toBe(false);
     expect(viewB1.byName['explicit-boundary-ring'].visible).toBe(false);
     expect(viewB1.byName['explicit-measured'].visible).toBe(false);
+    expect(viewB1.byName['explicit-rungs'].visible).toBe(false);
     expect(viewB1.byName['explicit-axis'].visible).toBe(true);
     expect(viewB1.byName['explicit-ribbon'].visible).toBe(true);
     expect(viewB1.shellVisibleInfo).toBe(false);
@@ -477,18 +498,20 @@ test.describe('explicit formula mode', () => {
     expect(viewB2.byName['explicit-shell'].visible).toBe(false);
     expect(viewB2.byName['explicit-boundary-ring'].visible).toBe(false);
     expect(viewB2.byName['explicit-measured'].visible).toBe(false);
+    expect(viewB2.byName['explicit-rungs'].visible).toBe(false);
     expect(viewB2.ribbonTail).not.toEqual(viewB1.ribbonTail);
     for (const name of Object.keys(viewA1.byName)) {
       expect(viewB2.byName[name].uuid).toBe(viewA1.byName[name].uuid);
     }
 
-    // Returning to View A restores shell, boundary ring, and measured curve from cache
+    // Returning to View A restores shell, boundary ring, rungs, and measured curve from cache
     await page.locator('#explicit-view-a').click();
     await expect(page.locator('#explicit-view-a')).toHaveAttribute('aria-pressed', 'true');
     const viewA2 = await snapshot();
     expect(viewA2.byName['explicit-shell'].visible).toBe(true);
     expect(viewA2.byName['explicit-boundary-ring'].visible).toBe(true);
     expect(viewA2.byName['explicit-measured'].visible).toBe(true);
+    expect(viewA2.byName['explicit-rungs'].visible).toBe(true);
     expect(viewA2.shellVisibleInfo).toBe(true);
     for (const name of Object.keys(viewA1.byName)) {
       expect(viewA2.byName[name].uuid).toBe(viewA1.byName[name].uuid);
@@ -1194,6 +1217,95 @@ test.describe('explicit formula mode', () => {
     expect(result.checked).toBe(12800 + 128);
     expect(result.valueMismatchCount, JSON.stringify(result.valueSample)).toBe(0);
     expect(result.mismatchCount, JSON.stringify(result.sample)).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  // ---- Issue #26: outline shell, foreground curves, residual rungs --------
+
+  test('Issue #26: measured & reconstruction curves render in front of shell/axis/rungs; residual rungs shorten as N increases (manual & sweep)', async ({ page }) => {
+    test.setTimeout(180_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.view === 'a');
+
+    // 1. Verify draw order puts measured (cyan) & ribbon (orange) in front of axis/shell/ring/primes/rungs
+    const orderInfo = await page.evaluate(() => {
+      const g = window.__APP_STATE__.scene.getObjectByName('explicit-group');
+      const byName = Object.fromEntries(g.children.map(c => [c.name, {
+        renderOrder: c.renderOrder,
+        transparent: c.material.transparent,
+        depthWrite: c.material.depthWrite,
+        isLineSegments: c.isLineSegments === true,
+        isMesh: c.isMesh === true,
+      }]));
+      return byName;
+    });
+
+    expect(orderInfo['explicit-shell'].isLineSegments).toBe(true);
+    expect(orderInfo['explicit-shell'].isMesh).toBe(false);
+    expect(orderInfo['explicit-rungs'].isLineSegments).toBe(true);
+    for (const bg of ['explicit-axis', 'explicit-shell', 'explicit-boundary-ring', 'explicit-primes', 'explicit-rungs']) {
+      expect(orderInfo[bg].transparent).toBe(true);
+      expect(orderInfo[bg].depthWrite).toBe(false);
+      expect(orderInfo['explicit-ribbon'].renderOrder).toBeGreaterThan(orderInfo[bg].renderOrder);
+      expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo[bg].renderOrder);
+    }
+    expect(orderInfo['explicit-ribbon'].transparent).toBe(true);
+    expect(orderInfo['explicit-measured'].transparent).toBe(true);
+    expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo['explicit-ribbon'].renderOrder);
+
+    // 2. Measure mean rung length across N = 10 -> 100 -> 1000
+    const measureRungs = () => page.evaluate(() => {
+      const rungs = window.__APP_STATE__.scene.getObjectByName('explicit-rungs');
+      const pos = rungs.geometry.attributes.position;
+      const count = pos.count / 2;
+      let sum = 0;
+      let max = 0;
+      for (let k = 0; k < count; k++) {
+        const ax = pos.getX(2 * k), ay = pos.getY(2 * k), az = pos.getZ(2 * k);
+        const bx = pos.getX(2 * k + 1), by = pos.getY(2 * k + 1), bz = pos.getZ(2 * k + 1);
+        const len = Math.hypot(bx - ax, by - ay, bz - az);
+        sum += len;
+        if (len > max) max = len;
+      }
+      return { visible: rungs.visible, count, meanLen: sum / count, maxLen: max };
+    });
+
+    const rungStats = {};
+    for (const n of [10, 100, 1000]) {
+      await setN(page, n);
+      rungStats[n] = await measureRungs();
+      expect(rungStats[n].visible).toBe(true);
+      expect(rungStats[n].count).toBeGreaterThanOrEqual(50);
+    }
+    console.log('Residual rung meanLen (display units):', JSON.stringify(rungStats));
+    expect(rungStats[10].meanLen).toBeGreaterThan(rungStats[100].meanLen);
+    expect(rungStats[100].meanLen).toBeGreaterThan(rungStats[1000].meanLen);
+    expect(rungStats[1000].meanLen).toBeGreaterThan(0);
+
+    // 3. Sweep playback also updates rungs (N=0 -> 1000) and shortens them by completion
+    await setN(page, 0);
+    const atN0 = await measureRungs();
+    expect(atN0.meanLen).toBeGreaterThan(rungStats[1000].meanLen);
+
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
+    await page.locator('#explicit-sweep-btn').click();
+    await expect.poll(
+      async () => page.evaluate(() => ({
+        sweepState: window.__APP_STATE__.explicitSweepState,
+        N: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N,
+      })),
+      { timeout: 30_000 },
+    ).toEqual({ sweepState: 'done', N: 1000 });
+
+    const afterSweep = await measureRungs();
+    expect(afterSweep.meanLen).toBeLessThan(atN0.meanLen);
+    expect(Math.abs(afterSweep.meanLen - rungStats[1000].meanLen)).toBeLessThan(1e-6);
+
+    // 4. View B hides rungs without altering View B behavior
+    await page.locator('#explicit-view-b').click();
+    const inViewB = await measureRungs();
+    expect(inViewB.visible).toBe(false);
     expect(errors).toEqual([]);
   });
 });

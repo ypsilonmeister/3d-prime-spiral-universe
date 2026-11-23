@@ -21,7 +21,8 @@ export function initElements() {
         'sieve-stats', 'composite-select', 'vr-btn', 'count-val', 'count-slider',
         'spacing-val', 'spacing-slider', 'range-info', 'current-state-text',
         'ui-overlay', 'show-ui-hint', 'help-tooltip', 'nav-rh', 'group-lattice', 'group-spacing',
-        'group-zeta-toggle', 'group-explicit-toggle', 'sw-explicit', 'explicit-kind-psi1', 'explicit-kind-psi',
+        'group-zeta-toggle', 'group-explicit-toggle', 'sw-explicit', 'explicit-sweep-btn',
+        'explicit-kind-psi1', 'explicit-kind-psi',
         'explicit-view-a', 'explicit-view-b', 'sw-explicit-primes', 'group-padic-toggle', 'group-primedim-toggle',
         'group-ntl-toggle', 'group-sieve-toggle'
     ];

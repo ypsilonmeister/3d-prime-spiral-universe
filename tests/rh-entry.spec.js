@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { parseLaunchOptions, buildCleanExitUrl, DEFAULT_PAGE_TITLE, RH_PAGE_TITLE } from '../app/launch-options.js';
+import { EXPLICIT_SWEEP_STEPS, EXPLICIT_SWEEP_INITIAL_DELAY_MS } from '../app/modes/explicit-sweep.js';
 
 async function waitForReady(page) {
   await expect.poll(
@@ -20,13 +21,33 @@ async function waitForExplicitSettled(page) {
 }
 
 test.describe('launch-options helpers', () => {
-  test('parseLaunchOptions parses explicit / rh modes and optional kind/view', () => {
-    expect(parseLaunchOptions('')).toEqual({ mode: null, kind: null, view: null });
-    expect(parseLaunchOptions('?mode=explicit')).toEqual({ mode: 'explicit', kind: null, view: null });
-    expect(parseLaunchOptions('?mode=rh')).toEqual({ mode: 'explicit', kind: null, view: null });
-    expect(parseLaunchOptions('?mode=EXPLICIT&kind=PSI&view=B')).toEqual({ mode: 'explicit', kind: 'psi', view: 'b' });
-    expect(parseLaunchOptions('?mode=explicit&kind=psi1&view=a')).toEqual({ mode: 'explicit', kind: 'psi1', view: 'a' });
-    expect(parseLaunchOptions('?mode=unknown&kind=bad&view=z')).toEqual({ mode: null, kind: null, view: null });
+  test('parseLaunchOptions parses explicit / rh modes, kind/view, and autoSweep/reducedMotion', () => {
+    expect(parseLaunchOptions('')).toEqual({ mode: null, kind: null, view: null, autoSweep: false });
+    expect(parseLaunchOptions('?mode=explicit')).toEqual({ mode: 'explicit', kind: null, view: null, autoSweep: true });
+    expect(parseLaunchOptions('?mode=rh')).toEqual({ mode: 'explicit', kind: null, view: null, autoSweep: true });
+    expect(parseLaunchOptions('?mode=EXPLICIT&kind=PSI&view=B')).toEqual({ mode: 'explicit', kind: 'psi', view: 'b', autoSweep: true });
+    expect(parseLaunchOptions('?mode=explicit&kind=psi1&view=a&sweep=0')).toEqual({ mode: 'explicit', kind: 'psi1', view: 'a', autoSweep: false });
+    expect(parseLaunchOptions('?mode=explicit&sweep=1')).toEqual({ mode: 'explicit', kind: null, view: null, autoSweep: true });
+    expect(parseLaunchOptions('?mode=explicit', { reducedMotion: true })).toEqual({ mode: 'explicit', kind: null, view: null, autoSweep: false });
+    expect(parseLaunchOptions('?mode=unknown&kind=bad&view=z')).toEqual({ mode: null, kind: null, view: null, autoSweep: false });
+  });
+
+  test('EXPLICIT_SWEEP_STEPS matches the non-linear 45-step 0->1000 schedule (~10.5s)', () => {
+    expect(EXPLICIT_SWEEP_STEPS).toHaveLength(45);
+    expect(EXPLICIT_SWEEP_STEPS[0]).toEqual({ n: 0, intervalMs: EXPLICIT_SWEEP_INITIAL_DELAY_MS });
+    expect(EXPLICIT_SWEEP_STEPS[EXPLICIT_SWEEP_STEPS.length - 1].n).toBe(1000);
+
+    const expectedNs = [
+      0,
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+      12, 14, 16, 18, 20, 25, 30, 35, 40, 50, 60, 70, 80, 90, 100,
+      120, 140, 160, 180, 200, 240, 280, 320, 360, 400, 450, 500, 560, 620, 700, 780, 860, 930, 1000,
+    ];
+    expect(EXPLICIT_SWEEP_STEPS.map(s => s.n)).toEqual(expectedNs);
+
+    // Sum of waits between steps (steps 0..43) should be ~10.2s (total ~10.5s with compute)
+    const totalWaitMs = EXPLICIT_SWEEP_STEPS.slice(0, -1).reduce((acc, s) => acc + s.intervalMs, 0);
+    expect(totalWaitMs).toBe(10190);
   });
 
   test('buildCleanExitUrl removes launch params while preserving other params and hash', () => {
@@ -126,7 +147,8 @@ test.describe('RH dedicated entry page (/rh/) and explicit launch path', () => {
     ]);
     expect(snapshot.glError).toBe(0);
     expect(snapshot.M).toBe(1600);
-    expect(snapshot.N).toBe(100);
+    expect(snapshot.N).toBeGreaterThanOrEqual(0);
+    expect(snapshot.N).toBeLessThanOrEqual(1000);
     // Initial normal lattice build must be skipped on explicit launch
     expect(snapshot.maxBaseTarget).toBe(0);
     expect(snapshot.maxTarget).toBe(0);
@@ -244,12 +266,22 @@ test.describe('RH dedicated entry page (/rh/) and explicit launch path', () => {
     await waitForExplicitSettled(page);
 
     await expect(page.locator('#explicit-status')).toHaveText('(fallback mode: reduced samples)');
+    // Speed up sweep to verify fallback mode completes all 45 steps cleanly to N=1000
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
+    await expect.poll(
+      async () => page.evaluate(() => ({
+        state: window.__APP_STATE__.explicitSweepState,
+        N: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N,
+      })),
+      { timeout: 30_000, message: 'Fallback auto-sweep should finish at N=1000' },
+    ).toEqual({ state: 'done', N: 1000 });
+
     const info = await page.evaluate(() => ({
       M: window.__APP_STATE__.explicitInfo.M,
       N: window.__APP_STATE__.explicitInfo.N,
       fallback: window.__APP_STATE__.explicitInfo.fallback,
     }));
-    expect(info).toEqual({ M: 400, N: 100, fallback: true });
+    expect(info).toEqual({ M: 400, N: 1000, fallback: true });
 
     await page.locator('#group-explicit-toggle .toggle-row').click();
     await expect(page.locator('#sw-explicit')).not.toHaveClass(/on/);
@@ -295,5 +327,254 @@ test.describe('Explore Universes links to /rh/index.html', () => {
     await waitForReady(page);
     await waitForExplicitSettled(page);
     await expect(page.locator('#sw-explicit')).toHaveClass(/on/);
+  });
+});
+
+test.describe('Explicit Formula Mode N-sweep animation (PR 2)', () => {
+  test('/rh/ auto-sweeps monotonically, finishes once at N=1000 without looping, and replays via button', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = [];
+    page.on('pageerror', err => errors.push(err.message));
+
+    await page.goto('/rh/', { waitUntil: 'domcontentloaded' });
+    await page.waitForURL(/\?mode=explicit/);
+    await waitForReady(page);
+
+    // At normal speed, auto-sweep should be running and monotonically increasing N while RMS decreases
+    const first = await page.evaluate(() => ({
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+      N: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N,
+      rms: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.rms,
+    }));
+    expect(first.sweeping).toBe(true);
+    expect(first.sweepState).toBe('running');
+    await expect(page.locator('#explicit-sweep-btn')).toHaveText('⏸ 停止');
+    // WCAG: button with changing Play/Pause/Replay label must not also set aria-pressed
+    await expect(page.locator('#explicit-sweep-btn')).not.toHaveAttribute('aria-pressed');
+
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N),
+      { timeout: 10_000, message: 'Auto-sweep should advance N without user input' },
+    ).toBeGreaterThan(first.N ?? 0);
+
+    // Speed up remaining steps to deterministically verify completion at N=1000
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
+    await expect.poll(
+      async () => page.evaluate(() => ({
+        sweeping: window.__APP_STATE__.explicitSweeping,
+        sweepState: window.__APP_STATE__.explicitSweepState,
+        N: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N,
+        zetaN: window.__APP_STATE__.zetaZeroCount,
+      })),
+      { timeout: 30_000, message: 'Auto-sweep should complete at N=1000' },
+    ).toEqual({ sweeping: false, sweepState: 'done', N: 1000, zetaN: 1000 });
+
+    const doneRms = await page.evaluate(() => window.__APP_STATE__.explicitInfo.rms);
+    if (first.rms != null) {
+      expect(doneRms).toBeLessThan(first.rms);
+    }
+    await expect(page.locator('#explicit-sweep-btn')).toHaveText('↺ もう一度再生');
+
+    // Confirm one-shot behavior (does NOT loop back to 0)
+    await page.waitForTimeout(400);
+    const afterWait = await page.evaluate(() => ({
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+      N: window.__APP_STATE__.explicitInfo.N,
+    }));
+    expect(afterWait).toEqual({ sweeping: false, sweepState: 'done', N: 1000 });
+
+    // Click "↺ もう一度再生" to replay from N=0 -> 1000
+    await page.locator('#explicit-sweep-btn').click();
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitSweepState),
+      { timeout: 5_000 },
+    ).toBe('running');
+    await expect.poll(
+      async () => page.evaluate(() => ({
+        sweepState: window.__APP_STATE__.explicitSweepState,
+        N: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N,
+      })),
+      { timeout: 30_000, message: 'Replay should finish at N=1000' },
+    ).toEqual({ sweepState: 'done', N: 1000 });
+    await expect(page.locator('#explicit-sweep-btn')).toHaveText('↺ もう一度再生');
+    expect(errors).toEqual([]);
+  });
+
+  test('slider intervention immediately stops auto-sweep and switches to manual control', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?mode=explicit', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitSweeping),
+      { timeout: 10_000 },
+    ).toBe(true);
+
+    // Move N slider manually
+    await page.locator('#zeta-n-slider').evaluate((el) => {
+      el.value = '42';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    const rightAfter = await page.evaluate(() => ({
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+      zetaN: window.__APP_STATE__.zetaZeroCount,
+    }));
+    expect(rightAfter).toEqual({ sweeping: false, sweepState: 'idle', zetaN: 42 });
+    await expect(page.locator('#explicit-sweep-btn')).toHaveText('▶ N スイープ');
+
+    await waitForExplicitSettled(page);
+    await page.waitForTimeout(600);
+    const settled = await page.evaluate(() => ({
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      N: window.__APP_STATE__.explicitInfo.N,
+      zetaN: window.__APP_STATE__.zetaZeroCount,
+    }));
+    expect(settled).toEqual({ sweeping: false, N: 42, zetaN: 42 });
+  });
+
+  test('View B keeps sweep running, pause/resume works, and Kind switch stops sweep', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?mode=explicit', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitSweeping),
+      { timeout: 10_000 },
+    ).toBe(true);
+
+    // Switching to View B must NOT stop the sweep
+    await page.locator('#explicit-view-b').click();
+    const nAtViewB = await page.evaluate(() => ({
+      view: window.__APP_STATE__.explicitView,
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      N: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N,
+    }));
+    expect(nAtViewB.view).toBe('b');
+    expect(nAtViewB.sweeping).toBe(true);
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N),
+      { timeout: 10_000, message: 'Sweep should continue advancing in View B' },
+    ).toBeGreaterThan(nAtViewB.N ?? 0);
+
+    // Pause via button
+    await page.locator('#explicit-sweep-btn').click();
+    const pausedN = await page.evaluate(() => ({
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+      N: window.__APP_STATE__.zetaZeroCount,
+    }));
+    expect(pausedN.sweeping).toBe(false);
+    expect(pausedN.sweepState).toBe('paused');
+    await expect(page.locator('#explicit-sweep-btn')).toHaveText('▶ 再開');
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => window.__APP_STATE__.zetaZeroCount)).toBe(pausedN.N);
+
+    // Resume via button
+    await page.locator('#explicit-sweep-btn').click();
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N),
+      { timeout: 10_000, message: 'Resume should advance past paused N' },
+    ).toBeGreaterThan(pausedN.N);
+
+    // Kind switch (psi1 -> psi) must stop the sweep
+    await page.locator('#explicit-kind-psi').click();
+    const afterKind = await page.evaluate(() => ({
+      kind: window.__APP_STATE__.explicitKind,
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+    }));
+    expect(afterKind).toEqual({ kind: 'psi', sweeping: false, sweepState: 'idle' });
+  });
+
+  test('exiting Explicit Mode immediately stops an active sweep', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = [];
+    page.on('pageerror', err => errors.push(err.message));
+
+    await page.goto('/?mode=explicit', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitSweeping),
+      { timeout: 10_000 },
+    ).toBe(true);
+
+    await page.locator('#group-explicit-toggle .toggle-row').click();
+    const afterExit = await page.evaluate(() => ({
+      active: window.__APP_STATE__.explicitModeActive,
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+    }));
+    expect(afterExit).toEqual({ active: false, sweeping: false, sweepState: 'idle' });
+
+    await page.waitForTimeout(500);
+    const later = await page.evaluate(() => ({
+      active: window.__APP_STATE__.explicitModeActive,
+      sweeping: window.__APP_STATE__.explicitSweeping,
+    }));
+    expect(later).toEqual({ active: false, sweeping: false });
+    expect(errors).toEqual([]);
+  });
+
+  test('prefers-reduced-motion: reduce and ?sweep=0 disable auto-sweep and start static at N=100', async ({ page }) => {
+    test.setTimeout(120_000);
+
+    // 1. ?sweep=0
+    await page.goto('/?mode=explicit&sweep=0', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+    await waitForExplicitSettled(page);
+    await page.waitForTimeout(600);
+    const sweepZero = await page.evaluate(() => ({
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+      N: window.__APP_STATE__.explicitInfo.N,
+    }));
+    expect(sweepZero).toEqual({ sweeping: false, sweepState: 'idle', N: 100 });
+    await expect(page.locator('#explicit-sweep-btn')).toHaveText('▶ N スイープ');
+
+    // 2. prefers-reduced-motion: reduce on /rh/
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/rh/', { waitUntil: 'domcontentloaded' });
+    await page.waitForURL(/\?mode=explicit/);
+    await waitForReady(page);
+    await waitForExplicitSettled(page);
+    await page.waitForTimeout(600);
+    const reduced = await page.evaluate(() => ({
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+      N: window.__APP_STATE__.explicitInfo.N,
+    }));
+    expect(reduced).toEqual({ sweeping: false, sweepState: 'idle', N: 100 });
+  });
+
+  test('manual Explicit Mode toggle from normal startup stays static at N=100 until manual sweep button is clicked', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+
+    await page.locator('#group-explicit-toggle .toggle-row').click();
+    await waitForExplicitSettled(page);
+    await page.waitForTimeout(600);
+
+    const manualStart = await page.evaluate(() => ({
+      sweeping: window.__APP_STATE__.explicitSweeping,
+      sweepState: window.__APP_STATE__.explicitSweepState,
+      N: window.__APP_STATE__.explicitInfo.N,
+    }));
+    expect(manualStart).toEqual({ sweeping: false, sweepState: 'idle', N: 100 });
+    await expect(page.locator('#explicit-sweep-btn')).toHaveText('▶ N スイープ');
+
+    // User can manually start the sweep from the Explicit controls button
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
+    await page.locator('#explicit-sweep-btn').click();
+    await expect.poll(
+      async () => page.evaluate(() => ({
+        sweepState: window.__APP_STATE__.explicitSweepState,
+        N: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N,
+      })),
+      { timeout: 30_000, message: 'Manual N sweep should finish at N=1000' },
+    ).toEqual({ sweepState: 'done', N: 1000 });
+    await expect(page.locator('#explicit-sweep-btn')).toHaveText('↺ もう一度再生');
   });
 });

@@ -139,7 +139,11 @@ function init(launch) {
         // Skip the initial normal lattice build (753k candidate sort) and avoid
         // a double fullRebuild(). Exiting Explicit Formula Mode lazily builds
         // the normal lattice via mode-manager.js -> rebuildPositions().
-        toggleMode('explicit', { fromLaunch: true });
+        toggleMode('explicit', {
+            fromLaunch: true,
+            autoSweep: Boolean(launch.autoSweep),
+            sweepDelayMs: 450,
+        });
     } else {
         // Build the lattice AND commit it into the live target buffer. Using
         // rebuildPositions (not bare calculateTargetPositions) ensures the points
@@ -173,7 +177,13 @@ const _nixieFont = new FontFace(
 );
 
 async function boot() {
-    const launch = parseLaunchOptions(typeof window !== 'undefined' ? window.location.search : '');
+    const reducedMotion = typeof window !== 'undefined'
+        && typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const launch = parseLaunchOptions(
+        typeof window !== 'undefined' ? window.location.search : '',
+        { reducedMotion },
+    );
     initElements();
     setBootStage('Loading font…', 2);
     const fontPromise = Promise.race([

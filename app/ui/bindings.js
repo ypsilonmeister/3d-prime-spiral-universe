@@ -9,6 +9,7 @@ import { computeZetaOffsets } from '../modes/zeta.js';
 import { cancelPendingZetaRequests } from '../worker-client.js';
 import { runZetaAnimation, stopZetaAnimation } from '../modes/zeta-anim.js';
 import { explicitMode } from '../modes/explicit.js';
+import { stopExplicitSweep, toggleExplicitSweep } from '../modes/explicit-sweep.js';
 import { computePadicValuations, applyPadicPositions, updatePadicColorVisuals } from '../modes/padic.js';
 import { computePrimeDimValuations, applyPrimeDimPositions, buildPrimeDimAxisObjects, removePrimeDimAxisObjects, updatePrimeDimVisuals } from '../modes/prime-dim.js';
 import { computeNTLOffsets, updateNTLVisuals } from '../modes/ntl.js';
@@ -136,6 +137,11 @@ export function bindUIEvents(enterVRCallback) {
         });
     }
 
+    const explicitSweepBtn = getElement('explicit-sweep-btn');
+    if (explicitSweepBtn) {
+        explicitSweepBtn.addEventListener('click', () => toggleExplicitSweep());
+    }
+
     const explicitKindPsi1 = getElement('explicit-kind-psi1');
     if (explicitKindPsi1) {
         explicitKindPsi1.addEventListener('click', () => explicitMode.setKind('psi1'));
@@ -178,6 +184,9 @@ export function bindUIEvents(enterVRCallback) {
     const zetaNSlider = getElement('zeta-n-slider');
     if (zetaNSlider) {
         zetaNSlider.addEventListener('input', (e) => {
+            if (state.explicitModeActive) {
+                stopExplicitSweep();
+            }
             const nextN = parseInt(e.target.value);
             const changed = nextN !== state.zetaZeroCount;
             state.zetaZeroCount = nextN;

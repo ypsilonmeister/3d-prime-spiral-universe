@@ -19,6 +19,14 @@ import { isWorkerReady, requestExplicit, cancelExplicitRequests, cancelPendingZe
 import { DEFAULT_PAGE_TITLE, RH_PAGE_TITLE, buildCleanExitUrl } from '../launch-options.js';
 import { computeZetaOffsets } from './zeta.js';
 import { stopZetaAnimation, runZetaAnimation, zetaAnimTarget, zetaAnimN } from './zeta-anim.js';
+import {
+    setExplicitSweepApplyCallback,
+    armExplicitSweep,
+    beginArmedExplicitSweep,
+    stopExplicitSweep,
+    syncExplicitSweepButton,
+    EXPLICIT_SWEEP_INITIAL_DELAY_MS,
+} from './explicit-sweep.js';
 
 export const EXPLICIT_SAMPLES = 1600;
 export const EXPLICIT_SAMPLES_FALLBACK = 400;
@@ -188,6 +196,7 @@ function renderExplicitPanel() {
     setSegButton('explicit-kind-psi', isPsi);
     setSegButton('explicit-view-a', !isViewB);
     setSegButton('explicit-view-b', isViewB);
+    syncExplicitSweepButton();
 
     const showPrimes = !!state.explicitShowPrimes;
     const swPrimes = document.getElementById('sw-explicit-primes');
@@ -514,15 +523,15 @@ async function fullRebuild() {
     } else {
         try {
             const m = await requestExplicit({ type: 'explicit_base', xMax, M, formulaKind: kind });
-            if (!m) return;
+            if (!m) return false;
             base = m;
         } catch (e) {
             // worker died: the failure handler starts a fallback rebuild (which bumps the token)
             console.error('explicit mode: worker request failed', e);
-            return;
+            return false;
         }
     }
-    if (myToken !== token || !group) return;
+    if (myToken !== token || !group) return false;
 
     const geo = buildStaticGeometry(base, xMax, M, kind);
     cache = {
@@ -537,7 +546,20 @@ async function fullRebuild() {
     });
     setStatus(fallback ? '(fallback mode: reduced samples)' : `M=${M}, x ∈ [2, ${xMax.toLocaleString()}]`);
     await computeRecon(currentN(), myToken);
+    return Boolean(myToken === token && group && cache && state.explicitModeActive);
 }
+
+async function applySweepStepN(n) {
+    if (!state.explicitModeActive || !cache) return false;
+    const clamped = Math.max(0, Math.min(n | 0, ZETA_ZEROS.length));
+    state.zetaZeroCount = clamped;
+    syncNControl();
+    const myToken = token;
+    await computeRecon(clamped, myToken);
+    return Boolean(state.explicitModeActive && myToken === token && cache && cache.N === clamped);
+}
+
+setExplicitSweepApplyCallback(applySweepStepN);
 
 function syncNControl() {
     if (typeof document === 'undefined') return;
@@ -560,7 +582,10 @@ function syncZetaNRestore() {
 
 // Worker died after startup: drop the ribbon work and redo it on the main thread (M=400).
 onWorkerFailure(() => {
-    if (state.explicitModeActive) fullRebuild();
+    if (state.explicitModeActive) {
+        stopExplicitSweep();
+        fullRebuild();
+    }
 });
 
 export const explicitMode = {
@@ -569,6 +594,10 @@ export const explicitMode = {
     enter(opts = {}) {
         state.explicitModeActive = true;
         launchedFromUrl = Boolean(opts && opts.fromLaunch);
+        const shouldAutoSweep = Boolean(opts && opts.autoSweep);
+        const sweepDelayMs = (opts && typeof opts.sweepDelayMs === 'number')
+            ? opts.sweepDelayMs
+            : EXPLICIT_SWEEP_INITIAL_DELAY_MS;
         if (launchedFromUrl && typeof document !== 'undefined') {
             document.title = RH_PAGE_TITLE;
         }
@@ -582,15 +611,28 @@ export const explicitMode = {
             savedAnim = { n: zetaAnimN(), target: zetaAnimTarget() };
             stopZetaAnimation();
         }
-        if (!(state.zetaZeroCount > 0)) state.zetaZeroCount = DEFAULT_N;
-        state.zetaZeroCount = Math.min(state.zetaZeroCount, ZETA_ZEROS.length);
+        if (shouldAutoSweep) {
+            state.zetaZeroCount = 0;
+        } else {
+            if (!(state.zetaZeroCount > 0)) state.zetaZeroCount = DEFAULT_N;
+            state.zetaZeroCount = Math.min(state.zetaZeroCount, ZETA_ZEROS.length);
+        }
         syncNControl();
         if (state.points) { prevPointsVisible = state.points.visible; state.points.visible = false; }
         state.explicitInfo = null;
-        fullRebuild();
+        stopExplicitSweep();
+        if (shouldAutoSweep) {
+            const sweepToken = armExplicitSweep();
+            fullRebuild().then((ok) => {
+                if (ok) beginArmedExplicitSweep(sweepToken, sweepDelayMs);
+            });
+        } else {
+            fullRebuild();
+        }
     },
     // opts.willRebuild: the caller rebuilds the lattice (and the Zeta Wave) right after, so don't recompute here.
     exit(opts = {}) {
+        stopExplicitSweep();
         state.explicitModeActive = false;
         const wasLaunchedFromUrl = launchedFromUrl;
         launchedFromUrl = false;
@@ -628,14 +670,20 @@ export const explicitMode = {
         computeRecon(currentN(), token);
     },
     onCountChange() {
-        if (state.explicitModeActive) fullRebuild();
+        if (state.explicitModeActive) {
+            stopExplicitSweep();
+            fullRebuild();
+        }
     },
     setKind(kind) {
         const next = kind === 'psi' ? 'psi' : 'psi1';
         if (state.explicitKind === next) return;
         state.explicitKind = next;
         renderExplicitPanel();
-        if (state.explicitModeActive) fullRebuild();
+        if (state.explicitModeActive) {
+            stopExplicitSweep();
+            fullRebuild();
+        }
     },
     setView(view) {
         const next = view === 'b' ? 'b' : 'a';

@@ -5,8 +5,11 @@ import { state } from './state.js';
 let _worker = null;
 let _workerReady = false;
 let _zetaReqId = 0;
-let _zetaResolveLast = null; // resolver for the latest in-flight zeta request
-let _onZetaProgress = null;  // UI callback for stage:'zeta' progress updates
+let _zetaActiveN = null;       // desired N of the latest in-flight zeta request
+let _zetaResolveLast = null;   // resolver for the latest in-flight zeta request
+let _zetaOnPartialLast = null; // callback for zeta_partial updates of the latest request
+let _zetaShownN = null;        // zeros currently applied from zeta_partial for the active request
+let _onZetaProgress = null;    // UI callback for stage:'zeta' progress updates
 let _explicitReqId = 0;
 const _explicitPending = new Map(); // reqId -> { resolve, reject }
 const _failureListeners = [];
@@ -24,9 +27,22 @@ function resetZetaProgress() {
     state.zetaComputing = false;
     state.zetaTargetN = 0;
     state.zetaProgressPct = 0;
+    _zetaShownN = null;
     if (_onZetaProgress) {
-        _onZetaProgress({ active: false, doneK: state.zetaComputedN, targetN: 0, pct: 0 });
+        _onZetaProgress({ active: false, doneK: state.zetaComputedN, shownK: null, targetN: 0, pct: 0 });
     }
+}
+
+// A worker zeta message is applicable only if its generation matches the latest request AND
+// the current mode/desired N still matches what was requested (prevents pre-rAF or out-of-band races).
+function isCurrentZetaReply(m) {
+    return m.reqId === _zetaReqId
+        && _zetaActiveN !== null
+        && state.zetaModeActive
+        && !state.explicitModeActive
+        && !state.padicModeActive
+        && !state.primeDimModeActive
+        && state.zetaZeroCount === _zetaActiveN;
 }
 
 const EXPLICIT_TIMEOUT_MS = 20000;   // no reply in this long => treat the worker as dead (no onerror needed)
@@ -62,16 +78,16 @@ export function initWorker(onProgress) {
             const m = e.data;
             if (m.type === 'progress') {
                 if (m.stage === 'zeta') {
-                    // Drop stale progress from cancelled/superseded zeta requests.
-                    if (m.reqId === _zetaReqId) {
+                    // Drop stale progress from cancelled/superseded zeta requests or mismatched desired N.
+                    if (isCurrentZetaReply(m)) {
                         state.zetaComputing = true;
-                        state.zetaComputedN = m.doneK;
                         state.zetaTargetN = m.targetN;
                         state.zetaProgressPct = m.pct;
                         if (_onZetaProgress) {
                             _onZetaProgress({
                                 active: true,
                                 doneK: m.doneK,
+                                shownK: _zetaShownN,
                                 startK: m.startK,
                                 targetN: m.targetN,
                                 pct: m.pct,
@@ -95,21 +111,49 @@ export function initWorker(onProgress) {
             } else if (m.type === 'explicit_done') {
                 const res = _explicitPending.get(m.reqId);
                 if (res) { _explicitPending.delete(m.reqId); res.resolve(m); }
-            } else if (m.type === 'zeta_done') {
-                // Apply only if it's the latest request (drop stale results)
-                if (m.reqId === _zetaReqId) {
+            } else if (m.type === 'zeta_partial') {
+                // Apply intermediate partial sum only for the latest request matching current desired N.
+                if (isCurrentZetaReply(m)) {
                     state.zetaOffsets = m.offsets;       // normalized (visual)
-                    state.zetaOffsetsRaw = m.rawOffsets; // unnormalized sum
-                    const doneN = typeof m.N === 'number' ? m.N : state.zetaZeroCount;
-                    state.zetaComputedN = doneN;
-                    state.zetaComputing = false;
-                    state.zetaTargetN = doneN;
-                    state.zetaProgressPct = 0;
+                    state.zetaOffsetsRaw = m.rawOffsets; // unnormalized sum (kept consistent with offsets)
+                    state.zetaComputedN = m.doneK;
+                    _zetaShownN = m.doneK;
+                    if (_zetaOnPartialLast) {
+                        _zetaOnPartialLast(m);
+                    }
                     if (_onZetaProgress) {
-                        _onZetaProgress({ active: false, doneK: doneN, targetN: doneN, pct: 0 });
+                        _onZetaProgress({
+                            active: state.zetaComputing,
+                            doneK: m.doneK,
+                            shownK: _zetaShownN,
+                            targetN: m.targetN,
+                            pct: state.zetaProgressPct,
+                        });
+                    }
+                }
+            } else if (m.type === 'zeta_done') {
+                // Apply only if it's the latest request and current desired N/mode still matches
+                if (m.reqId === _zetaReqId) {
+                    const apply = isCurrentZetaReply(m);
+                    _zetaActiveN = null;
+                    _zetaShownN = null;
+                    _zetaOnPartialLast = null;
+                    if (apply) {
+                        state.zetaOffsets = m.offsets;       // normalized (visual)
+                        state.zetaOffsetsRaw = m.rawOffsets; // unnormalized sum
+                        const doneN = typeof m.N === 'number' ? m.N : state.zetaZeroCount;
+                        state.zetaComputedN = doneN;
+                        state.zetaComputing = false;
+                        state.zetaTargetN = doneN;
+                        state.zetaProgressPct = 0;
+                        if (_onZetaProgress) {
+                            _onZetaProgress({ active: false, doneK: doneN, shownK: doneN, targetN: doneN, pct: 0 });
+                        }
+                    } else {
+                        resetZetaProgress();
                     }
                     if (_zetaResolveLast) {
-                        _zetaResolveLast(true);
+                        _zetaResolveLast(apply);
                         _zetaResolveLast = null;
                     }
                 }
@@ -121,7 +165,10 @@ export function initWorker(onProgress) {
 
 export function cancelPendingZetaRequests({ notifyWorker = true } = {}) {
     _zetaReqId++;
+    _zetaActiveN = null;
     const hadInFlight = _zetaResolveLast !== null;
+    _zetaOnPartialLast = null;
+    _zetaShownN = null;
     if (_zetaResolveLast) {
         _zetaResolveLast(false);
         _zetaResolveLast = null;
@@ -134,12 +181,14 @@ export function cancelPendingZetaRequests({ notifyWorker = true } = {}) {
 
 // Request a zeta offset recompute. Returns a promise that resolves when the latest request lands.
 // Older in-flight requests are abandoned (their reqId won't match).
-export function requestZetaOffsets(N, amplitude, spacing) {
+export function requestZetaOffsets(N, amplitude, spacing, { onPartial = null } = {}) {
     // cancelPendingZetaRequests already bumps _zetaReqId, giving this request a
     // fresh id that supersedes any in-flight one. The incoming 'zeta' message
     // cancels any active worker job directly, so no separate 'zeta_cancel' is needed.
     cancelPendingZetaRequests({ notifyWorker: false });
     const id = _zetaReqId;
+    _zetaActiveN = N;
+    _zetaOnPartialLast = typeof onPartial === 'function' ? onPartial : null;
     return new Promise(resolve => {
         _zetaResolveLast = ok => resolve(ok === true);
         _worker.postMessage({

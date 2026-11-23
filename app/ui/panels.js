@@ -79,7 +79,7 @@ export function onSieveUIUpdate() {
     onSieveProgress(state.sieveFinished, state.sieveFoundCount, state.sieveLimit, state.sieveCurrentP);
 }
 
-export function onZetaProgress({ active = false, doneK = 0, targetN = 0, pct = 0 } = {}) {
+export function onZetaProgress({ active = false, doneK = 0, shownK = null, targetN = 0, pct = 0 } = {}) {
     const wrap = elements['zeta-progress-wrap'];
     const prog = elements['zeta-progress'];
     const text = elements['zeta-progress-text'];
@@ -101,7 +101,13 @@ export function onZetaProgress({ active = false, doneK = 0, targetN = 0, pct = 0
     const clampedPct = Math.max(0, Math.min(100, pct));
     wrap.style.display = '';
     if (prog) prog.value = clampedPct;
-    if (text) text.textContent = `Computing zeros… ${doneK} / ${targetN} (${Math.round(clampedPct)}%)`;
+    if (text) {
+        if (typeof shownK === 'number') {
+            text.textContent = `Showing ${shownK} / ${targetN} zeros… (${Math.round(clampedPct)}%)`;
+        } else {
+            text.textContent = `Computing zeros… ${doneK} / ${targetN} (${Math.round(clampedPct)}%)`;
+        }
+    }
 }
 
 export function hideBootOverlay() {

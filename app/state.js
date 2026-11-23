@@ -88,6 +88,9 @@ export const state = {
     explicitKind: 'psi1', // 'psi1' (default) | 'psi'
     explicitView: 'a',    // 'a' (measured + recon + shell) | 'b' (residual ribbon only; shell hidden)
     explicitShowPrimes: true, // prime markers on the reference axis C(u) (default: shown)
+    explicitSweeping: false,
+    explicitSweepState: 'idle', // 'idle' | 'running' | 'paused' | 'done'
+    explicitSweepIntervalScale: 1, // test/debug scale factor for sweep step intervals (1 = normal ~10.5s)
     explicitInfo: null, // read-only snapshot of the latest computation (M, N, kind, view, rms, hud, shell ring xs, primeCount, primesVisible, fallback flag)
 
     // Math buffers loaded from worker

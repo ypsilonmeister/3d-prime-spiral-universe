@@ -15,10 +15,19 @@ import {
     computeExplicitResidual, computeExplicitHud, compressedOffset, compressionRef,
     explicitScaleParams, SCHOENFELD_X0,
 } from '../../shared/explicit-formula.js';
-import { isWorkerReady, requestExplicit, cancelExplicitRequests, cancelPendingZetaRequests, onWorkerFailure } from '../worker-client.js';
+import { isWorkerReady, requestExplicit, cancelExplicitRequests, cancelExplicitReconRequests, cancelPendingZetaRequests, onWorkerFailure } from '../worker-client.js';
 import { DEFAULT_PAGE_TITLE, RH_PAGE_TITLE, buildCleanExitUrl } from '../launch-options.js';
 import { computeZetaOffsets } from './zeta.js';
 import { stopZetaAnimation, runZetaAnimation, zetaAnimTarget, zetaAnimN } from './zeta-anim.js';
+import {
+    setExplicitSweepApplyCallback,
+    setExplicitSweepStopCallback,
+    armExplicitSweep,
+    beginArmedExplicitSweep,
+    stopExplicitSweep,
+    syncExplicitSweepButton,
+    EXPLICIT_SWEEP_INITIAL_DELAY_MS,
+} from './explicit-sweep.js';
 
 export const EXPLICIT_SAMPLES = 1600;
 export const EXPLICIT_SAMPLES_FALLBACK = 400;
@@ -33,6 +42,7 @@ const PRIME_MARKER_OPACITY = 0.85;
 
 let group = null;
 let token = 0;            // bumps on every full rebuild / exit; stale async results are dropped
+let reconToken = 0;       // bumps on every recon request / sweep stop / rebuild / exit; drops stale recon replies even for the same N
 let cache = null;         // { xMax, M, kind, fallback, xs, meas, bound, head, boundAtX0, frames, dMeas, yRef, shell, recon, residual, N }
 let reconSeq = 0;
 let prevPointsVisible = true;
@@ -188,6 +198,7 @@ function renderExplicitPanel() {
     setSegButton('explicit-kind-psi', isPsi);
     setSegButton('explicit-view-a', !isViewB);
     setSegButton('explicit-view-b', isViewB);
+    syncExplicitSweepButton();
 
     const showPrimes = !!state.explicitShowPrimes;
     const swPrimes = document.getElementById('sw-explicit-primes');
@@ -447,8 +458,13 @@ function updateRibbon(recon, residual) {
 
 // ---- computation orchestration -------------------------------------------
 
-function applyRecon(recon, N, myToken) {
-    if (myToken !== token || !group || !cache) return;
+function invalidateRecon() {
+    reconToken++;
+    cancelExplicitReconRequests();
+}
+
+function applyRecon(recon, N, myToken, myReconToken) {
+    if (myToken !== token || myReconToken !== reconToken || !group || !cache) return;
     const residual = computeExplicitResidual(cache.meas, recon);
     cache.recon = recon;
     cache.residual = residual;
@@ -466,6 +482,8 @@ function applyRecon(recon, N, myToken) {
 async function computeRecon(N, myToken) {
     const c = cache;
     if (!c) return;
+    const myReconToken = ++reconToken;
+    cancelExplicitReconRequests();
     publish({ pending: true });
     let recon;
     if (c.fallback) {
@@ -480,15 +498,16 @@ async function computeRecon(N, myToken) {
         if (!m) return;                       // superseded
         recon = m.recon;
     }
-    // A newer rebuild or N may have been requested meanwhile; only the latest is applied.
-    if (myToken !== token || N !== currentN()) return;
-    applyRecon(recon, N, myToken);
+    // A newer rebuild, recon request, sweep stop, or N may have occurred meanwhile; only the latest is applied.
+    if (myToken !== token || myReconToken !== reconToken || N !== currentN()) return;
+    applyRecon(recon, N, myToken, myReconToken);
 }
 
 function currentN() { return Math.max(0, Math.min(state.zetaZeroCount | 0, ZETA_ZEROS.length)); }
 
 async function fullRebuild() {
     const myToken = ++token;
+    reconToken++;
     cancelExplicitRequests();
     cache = null;
     if (group) disposeGroup();
@@ -514,15 +533,15 @@ async function fullRebuild() {
     } else {
         try {
             const m = await requestExplicit({ type: 'explicit_base', xMax, M, formulaKind: kind });
-            if (!m) return;
+            if (!m) return false;
             base = m;
         } catch (e) {
             // worker died: the failure handler starts a fallback rebuild (which bumps the token)
             console.error('explicit mode: worker request failed', e);
-            return;
+            return false;
         }
     }
-    if (myToken !== token || !group) return;
+    if (myToken !== token || !group) return false;
 
     const geo = buildStaticGeometry(base, xMax, M, kind);
     cache = {
@@ -537,7 +556,21 @@ async function fullRebuild() {
     });
     setStatus(fallback ? '(fallback mode: reduced samples)' : `M=${M}, x ∈ [2, ${xMax.toLocaleString()}]`);
     await computeRecon(currentN(), myToken);
+    return Boolean(myToken === token && group && cache && state.explicitModeActive);
 }
+
+async function applySweepStepN(n) {
+    if (!state.explicitModeActive || !cache) return false;
+    const clamped = Math.max(0, Math.min(n | 0, ZETA_ZEROS.length));
+    state.zetaZeroCount = clamped;
+    syncNControl();
+    const myToken = token;
+    await computeRecon(clamped, myToken);
+    return Boolean(state.explicitModeActive && myToken === token && cache && cache.N === clamped);
+}
+
+setExplicitSweepApplyCallback(applySweepStepN);
+setExplicitSweepStopCallback(invalidateRecon);
 
 function syncNControl() {
     if (typeof document === 'undefined') return;
@@ -560,7 +593,10 @@ function syncZetaNRestore() {
 
 // Worker died after startup: drop the ribbon work and redo it on the main thread (M=400).
 onWorkerFailure(() => {
-    if (state.explicitModeActive) fullRebuild();
+    if (state.explicitModeActive) {
+        stopExplicitSweep();
+        fullRebuild();
+    }
 });
 
 export const explicitMode = {
@@ -569,6 +605,10 @@ export const explicitMode = {
     enter(opts = {}) {
         state.explicitModeActive = true;
         launchedFromUrl = Boolean(opts && opts.fromLaunch);
+        const shouldAutoSweep = Boolean(opts && opts.autoSweep);
+        const sweepDelayMs = (opts && typeof opts.sweepDelayMs === 'number')
+            ? opts.sweepDelayMs
+            : EXPLICIT_SWEEP_INITIAL_DELAY_MS;
         if (launchedFromUrl && typeof document !== 'undefined') {
             document.title = RH_PAGE_TITLE;
         }
@@ -582,15 +622,28 @@ export const explicitMode = {
             savedAnim = { n: zetaAnimN(), target: zetaAnimTarget() };
             stopZetaAnimation();
         }
-        if (!(state.zetaZeroCount > 0)) state.zetaZeroCount = DEFAULT_N;
-        state.zetaZeroCount = Math.min(state.zetaZeroCount, ZETA_ZEROS.length);
+        if (shouldAutoSweep) {
+            state.zetaZeroCount = 0;
+        } else {
+            if (!(state.zetaZeroCount > 0)) state.zetaZeroCount = DEFAULT_N;
+            state.zetaZeroCount = Math.min(state.zetaZeroCount, ZETA_ZEROS.length);
+        }
         syncNControl();
         if (state.points) { prevPointsVisible = state.points.visible; state.points.visible = false; }
         state.explicitInfo = null;
-        fullRebuild();
+        stopExplicitSweep();
+        if (shouldAutoSweep) {
+            const sweepToken = armExplicitSweep();
+            fullRebuild().then((ok) => {
+                if (ok) beginArmedExplicitSweep(sweepToken, sweepDelayMs);
+            });
+        } else {
+            fullRebuild();
+        }
     },
     // opts.willRebuild: the caller rebuilds the lattice (and the Zeta Wave) right after, so don't recompute here.
     exit(opts = {}) {
+        stopExplicitSweep();
         state.explicitModeActive = false;
         const wasLaunchedFromUrl = launchedFromUrl;
         launchedFromUrl = false;
@@ -628,14 +681,20 @@ export const explicitMode = {
         computeRecon(currentN(), token);
     },
     onCountChange() {
-        if (state.explicitModeActive) fullRebuild();
+        if (state.explicitModeActive) {
+            stopExplicitSweep();
+            fullRebuild();
+        }
     },
     setKind(kind) {
         const next = kind === 'psi' ? 'psi' : 'psi1';
         if (state.explicitKind === next) return;
         state.explicitKind = next;
         renderExplicitPanel();
-        if (state.explicitModeActive) fullRebuild();
+        if (state.explicitModeActive) {
+            stopExplicitSweep();
+            fullRebuild();
+        }
     },
     setView(view) {
         const next = view === 'b' ? 'b' : 'a';

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>リーマン予想と素数 — Explicit Formula | PrimeCrystal</title>
+    <meta name="description" content="素数の分布のゆらぎ ψ₁(x) − x²/2 とゼータ零点による再構成、およびリーマン予想（RH）を仮定した場合の誤差上限の殻を 3D 螺旋上で可視化します。">
+    <link rel="canonical" href="https://ypsilonmeister.github.io/3d-prime-spiral-universe/rh/">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="PrimeCrystal — 3D Prime Spiral Universe">
+    <meta property="og:locale" content="ja_JP">
+    <meta property="og:title" content="リーマン予想と素数 — Explicit Formula | PrimeCrystal">
+    <meta property="og:description" content="素数の分布のゆらぎ ψ₁(x) − x²/2 とゼータ零点による再構成、およびリーマン予想（RH）を仮定した場合の誤差上限の殻を 3D 螺旋上で可視化します。">
+    <meta property="og:url" content="https://ypsilonmeister.github.io/3d-prime-spiral-universe/rh/">
+    <meta property="og:image" content="https://ypsilonmeister.github.io/3d-prime-spiral-universe/rh/explicit-formula.webp">
+    <meta property="og:image:type" content="image/webp">
+    <meta property="og:image:alt" content="3D 円錐螺旋上に描かれた実測のゆらぎ ψ₁(x) − x²/2、ゼータ零点による再構成、および RH を仮定した場合の誤差上限の殻">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="リーマン予想と素数 — Explicit Formula | PrimeCrystal">
+    <meta name="twitter:description" content="素数の分布のゆらぎ ψ₁(x) − x²/2 とゼータ零点による再構成、およびリーマン予想（RH）を仮定した場合の誤差上限の殻を 3D 螺旋上で可視化します。">
+    <meta name="twitter:image" content="https://ypsilonmeister.github.io/3d-prime-spiral-universe/rh/explicit-formula.webp">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            min-height: 100%;
+            background: #010102;
+            color: #e0e0e0;
+            font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+        }
+        main {
+            max-width: 38rem;
+            margin: 12vh auto 0;
+            padding: 1.5rem;
+            line-height: 1.7;
+        }
+        h1 {
+            margin: 0 0 0.75rem;
+            font-size: 1.35rem;
+            color: #00f2ff;
+            font-weight: 600;
+        }
+        a {
+            color: #66f7ff;
+            text-underline-offset: 3px;
+        }
+        a:focus-visible {
+            outline: 2px solid #00f2ff;
+            outline-offset: 3px;
+        }
+    </style>
+    <script>
+        (() => {
+            const incoming = new URLSearchParams(window.location.search);
+            const params = new URLSearchParams();
+            params.set('mode', 'explicit');
+            for (const [k, v] of incoming.entries()) {
+                if (k !== 'mode') params.append(k, v);
+            }
+            window.location.replace(`../?${params.toString()}${window.location.hash}`);
+        })();
+    </script>
+</head>
+<body>
+    <main>
+        <h1>リーマン予想と素数 — Explicit Formula</h1>
+        <p>素数の分布のゆらぎ ψ₁(x) − x²/2、ゼータ関数の非自明零点による再構成、およびリーマン予想（RH）を仮定した場合の誤差上限の殻を 3D 螺旋上で可視化します（未解決予想の仮定のもとでの可視化であり、証明ではありません）。</p>
+        <noscript>
+            <p>JavaScript が無効のため自動遷移できません。以下のリンクから開いてください。</p>
+            <p><a href="../?mode=explicit">リーマン予想と素数（Explicit Formula Mode）を開く</a></p>
+        </noscript>
+    </main>
+</body>
+</html>

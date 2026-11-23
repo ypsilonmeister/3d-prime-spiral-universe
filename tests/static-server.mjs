@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, statSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { extname, isAbsolute, normalize, relative, resolve } from 'node:path';
+import { extname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 
 const port = Number(process.argv[2] || 31828);
 const root = process.cwd();
@@ -14,6 +14,7 @@ const contentTypes = {
   '.png': 'image/png',
   '.svg': 'image/svg+xml',
   '.wasm': 'application/wasm',
+  '.webp': 'image/webp',
 };
 
 const server = createServer((req, res) => {
@@ -33,8 +34,27 @@ const server = createServer((req, res) => {
     return;
   }
 
-  const filePath = resolve(root, `.${normalize(requestedPath)}`);
-  const relPath = relative(root, filePath);
+  let filePath = resolve(root, `.${normalize(requestedPath)}`);
+  let relPath = relative(root, filePath);
+
+  if (relPath.startsWith('..') || isAbsolute(relPath) || !existsSync(filePath)) {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Not found');
+    return;
+  }
+
+  if (statSync(filePath).isDirectory()) {
+    if (!url.pathname.endsWith('/')) {
+      res.writeHead(301, {
+        location: `${url.pathname}/${url.search}`,
+        'cache-control': 'no-store',
+      });
+      res.end();
+      return;
+    }
+    filePath = join(filePath, 'index.html');
+    relPath = relative(root, filePath);
+  }
 
   if (relPath.startsWith('..') || isAbsolute(relPath) || !existsSync(filePath) || !statSync(filePath).isFile()) {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });

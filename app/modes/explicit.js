@@ -16,6 +16,7 @@ import {
     explicitScaleParams, SCHOENFELD_X0,
 } from '../../shared/explicit-formula.js';
 import { isWorkerReady, requestExplicit, cancelExplicitRequests, cancelPendingZetaRequests, onWorkerFailure } from '../worker-client.js';
+import { DEFAULT_PAGE_TITLE, RH_PAGE_TITLE, buildCleanExitUrl } from '../launch-options.js';
 import { computeZetaOffsets } from './zeta.js';
 import { stopZetaAnimation, runZetaAnimation, zetaAnimTarget, zetaAnimN } from './zeta-anim.js';
 
@@ -37,6 +38,7 @@ let reconSeq = 0;
 let prevPointsVisible = true;
 let savedAnim = null;     // { n, target } of a Zeta animation running at entry, resumed on exit
 let savedZetaN = null;    // zetaZeroCount at entry, restored on exit
+let launchedFromUrl = false; // true when entered via ?mode=explicit launch path
 let syncTables = null;    // { max, tables } for the fallback path
 let syncDenom = null;     // cached buildZetaDenom(ZETA_ZEROS) for the fallback psi path
 
@@ -564,8 +566,12 @@ onWorkerFailure(() => {
 export const explicitMode = {
     id: 'explicit',
     kind: 'owner',
-    enter() {
+    enter(opts = {}) {
         state.explicitModeActive = true;
+        launchedFromUrl = Boolean(opts && opts.fromLaunch);
+        if (launchedFromUrl && typeof document !== 'undefined') {
+            document.title = RH_PAGE_TITLE;
+        }
         savedZetaN = state.zetaZeroCount;
         // Cancel any in-flight Zeta worker computation so explicit_base/recon are not blocked
         // behind a long Zeta run (which could otherwise hit EXPLICIT_TIMEOUT_MS and terminate the worker).
@@ -586,6 +592,8 @@ export const explicitMode = {
     // opts.willRebuild: the caller rebuilds the lattice (and the Zeta Wave) right after, so don't recompute here.
     exit(opts = {}) {
         state.explicitModeActive = false;
+        const wasLaunchedFromUrl = launchedFromUrl;
+        launchedFromUrl = false;
         token++;
         cancelExplicitRequests();
         cache = null;
@@ -594,6 +602,14 @@ export const explicitMode = {
         if (state.points) state.points.visible = prevPointsVisible;
         setStatus('');
         renderExplicitPanel();
+        if (wasLaunchedFromUrl) {
+            if (typeof document !== 'undefined') {
+                document.title = DEFAULT_PAGE_TITLE;
+            }
+            if (typeof window !== 'undefined' && window.history && typeof window.history.replaceState === 'function') {
+                window.history.replaceState(null, '', buildCleanExitUrl(window.location));
+            }
+        }
         // Hand N back to the Zeta Wave exactly as it was, and resync it if it is still on.
         if (savedZetaN != null) { state.zetaZeroCount = savedZetaN; savedZetaN = null; }
         const anim = savedAnim; savedAnim = null;

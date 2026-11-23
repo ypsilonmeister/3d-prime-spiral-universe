@@ -44,7 +44,8 @@ Measured $\psi_1(x) - x^2/2$ (cyan), reconstruction from the first $N=100$ zeta 
 
 ## Sub-Universes / 関連プロジェクト
 
-The repository also includes standalone visualizations exploring different aspects of number theory:
+The repository also includes standalone visualizations and dedicated entry points exploring different aspects of number theory:
+- **Riemann Hypothesis & Primes (`/rh` — [Live Demo](https://ypsilonmeister.github.io/3d-prime-spiral-universe/rh/)):** Dedicated entry into Explicit Formula Mode, visualizing $\psi_1(x) - x^2/2$, $N$-zero reconstructions, and the RH-assumed error bound shell $\pm B_1(x)$ (not a proven bound). / リーマン予想と素数（明示公式モード専用入口）：実測 $\psi_1(x) - x^2/2$、$N$ 個の零点による再構成、RH を仮定した場合の誤差上限殻 $\pm B_1(x)$ を可視化します。
 - **Warped Number Theory Universe (`/warpednt`):** A new visualization exploring space with custom mathematical metrics and warp strengths.
 - **Gaussian Primes (`/gaussianprimes`):** Visualization of primes in the complex plane.
 - **Prime Music (`/primemusic`):** Auditory exploration of prime distributions.

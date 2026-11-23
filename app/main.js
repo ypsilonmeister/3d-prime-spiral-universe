@@ -17,8 +17,9 @@ import {
 } from './ui/panels.js';
 import { bindUIEvents, toggleType } from './ui/bindings.js';
 
-import { initModeManager, setUIDisabledStateUpdateCallback, rebuildPositions } from './modes/mode-manager.js';
+import { initModeManager, setUIDisabledStateUpdateCallback, rebuildPositions, toggleMode } from './modes/mode-manager.js';
 import { sieveTick, setSieveCallbacks } from './modes/sieve-anim.js';
+import { parseLaunchOptions } from './launch-options.js';
 
 // Debug/test handle: exposes the app state so end-to-end tests can assert on
 // committed positions. Harmless for a visualization with no secrets.
@@ -78,7 +79,7 @@ async function enterVR() {
     }
 }
 
-function init() {
+function init(launch) {
     state.scene = new THREE.Scene();
 
     state.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 200000);
@@ -132,10 +133,19 @@ function init() {
 
     bindUIEvents(enterVR);
 
-    // Build the lattice AND commit it into the live target buffer. Using
-    // rebuildPositions (not bare calculateTargetPositions) ensures the points
-    // lerp toward the lattice instead of collapsing to the origin.
-    rebuildPositions();
+    if (launch && launch.mode === 'explicit') {
+        if (launch.kind) state.explicitKind = launch.kind;
+        if (launch.view) state.explicitView = launch.view;
+        // Skip the initial normal lattice build (753k candidate sort) and avoid
+        // a double fullRebuild(). Exiting Explicit Formula Mode lazily builds
+        // the normal lattice via mode-manager.js -> rebuildPositions().
+        toggleMode('explicit', { fromLaunch: true });
+    } else {
+        // Build the lattice AND commit it into the live target buffer. Using
+        // rebuildPositions (not bare calculateTargetPositions) ensures the points
+        // lerp toward the lattice instead of collapsing to the origin.
+        rebuildPositions();
+    }
     updateUI();
 
     state.renderer.setAnimationLoop(animate);
@@ -163,6 +173,7 @@ const _nixieFont = new FontFace(
 );
 
 async function boot() {
+    const launch = parseLaunchOptions(typeof window !== 'undefined' ? window.location.search : '');
     initElements();
     setBootStage('Loading font…', 2);
     const fontPromise = Promise.race([
@@ -177,8 +188,8 @@ async function boot() {
         _fallbackBuildOnMainThread();
     }
     await fontPromise;
-    setBootStage('Building lattice…', 99);
-    init();
+    setBootStage(launch.mode === 'explicit' ? 'Preparing Explicit Formula…' : 'Building lattice…', 99);
+    init(launch);
     setBootStage('Ready', 100);
     requestAnimationFrame(() => hideBootOverlay());
 }

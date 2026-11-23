@@ -142,6 +142,41 @@ export function bindUIEvents(enterVRCallback) {
         explicitSweepBtn.addEventListener('click', () => toggleExplicitSweep());
     }
 
+    const rhGuideSweepBtn = getElement('rh-guide-sweep-btn');
+    if (rhGuideSweepBtn) {
+        rhGuideSweepBtn.addEventListener('click', () => toggleExplicitSweep());
+    }
+
+    const rhGuideOpenBtn = getElement('rh-guide-open-btn');
+    if (rhGuideOpenBtn) {
+        rhGuideOpenBtn.addEventListener('click', () => {
+            state.rhGuideCollapsed = false;
+            updateUI();
+            const collapseBtn = getElement('rh-guide-collapse-btn');
+            if (collapseBtn) collapseBtn.focus();
+        });
+    }
+
+    const rhGuideCollapseBtn = getElement('rh-guide-collapse-btn');
+    if (rhGuideCollapseBtn) {
+        rhGuideCollapseBtn.addEventListener('click', () => {
+            state.rhGuideCollapsed = true;
+            updateUI();
+            const openBtn = getElement('rh-guide-open-btn');
+            if (openBtn) openBtn.focus();
+        });
+    }
+
+    const rhExitBtn = getElement('rh-exit-btn');
+    if (rhExitBtn) {
+        rhExitBtn.addEventListener('click', () => {
+            if (state.explicitModeActive) {
+                toggleMode('explicit');
+                updateUI();
+            }
+        });
+    }
+
     const explicitKindPsi1 = getElement('explicit-kind-psi1');
     if (explicitKindPsi1) {
         explicitKindPsi1.addEventListener('click', () => explicitMode.setKind('psi1'));
@@ -191,6 +226,8 @@ export function bindUIEvents(enterVRCallback) {
             const changed = nextN !== state.zetaZeroCount;
             state.zetaZeroCount = nextN;
             getElement('zeta-n-val').innerText = state.zetaZeroCount;
+            const guideN = getElement('rh-guide-n-val');
+            if (guideN) guideN.textContent = String(state.zetaZeroCount);
             // Invalidate any in-flight Zeta request immediately on N input so stale partials/progress
             // cannot mutate state or UI during the window before rafThrottle fires.
             if (changed && state.zetaModeActive && !state.explicitModeActive) {
@@ -549,6 +586,8 @@ export function bindUIEvents(enterVRCallback) {
 export function toggleUI() {
     state.uiVisible = !state.uiVisible;
     getElement('ui-overlay').classList.toggle('hidden', !state.uiVisible);
+    const rhPanel = getElement('rh-guide-panel');
+    if (rhPanel) rhPanel.classList.toggle('hidden', !state.uiVisible);
     getElement('show-ui-hint').style.opacity = state.uiVisible ? '0' : '0.5';
 }
 

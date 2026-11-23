@@ -708,3 +708,281 @@ test.describe('Explicit Formula Mode N-sweep animation (PR 2)', () => {
     await expect(page.locator('#explicit-sweep-btn')).toHaveText('↺ もう一度再生');
   });
 });
+
+test.describe('RH 3-block explanation panel (PR 3)', () => {
+  test('dedicated entry (?mode=explicit) opens panel expanded with 3 compliant blocks, Kind/View sync, H-key sync, and exit button', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = [];
+    page.on('pageerror', err => errors.push(err.message));
+
+    await page.goto('/?mode=explicit&sweep=0', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+    await waitForExplicitSettled(page);
+
+    const panel = page.locator('#rh-guide-panel');
+    const card = page.locator('#rh-guide-card');
+    const openBtn = page.locator('#rh-guide-open-btn');
+    const collapseBtn = page.locator('#rh-guide-collapse-btn');
+
+    // Expanded by default on dedicated entry (D2=A)
+    await expect(panel).toBeVisible();
+    await expect(card).toBeVisible();
+    await expect(openBtn).toBeHidden();
+    const initState = await page.evaluate(() => ({
+      visible: window.__APP_STATE__.rhGuideVisible,
+      collapsed: window.__APP_STATE__.rhGuideCollapsed,
+    }));
+    expect(initState).toEqual({ visible: true, collapsed: false });
+
+    // Positioned as an independent top-right card without overlapping left #ui-overlay
+    const boxes = await page.evaluate(() => {
+      const left = document.getElementById('ui-overlay').getBoundingClientRect();
+      const right = document.getElementById('rh-guide-card').getBoundingClientRect();
+      return { leftRight: left.right, rightLeft: right.left, rightTop: right.top };
+    });
+    expect(boxes.rightLeft).toBeGreaterThan(boxes.leftRight);
+    expect(boxes.rightTop).toBeLessThan(40);
+
+    // Strictly 3 blocks matching the 3 visual elements 1-to-1
+    const blocks = page.locator('#rh-guide-blocks .rh-guide-block');
+    await expect(blocks).toHaveCount(3);
+    await expect(page.locator('#rh-block-measured')).toContainText('ψ₁(x) − x²/2');
+    await expect(page.locator('#rh-block-measured')).toContainText('シアン');
+    await expect(page.locator('#rh-block-recon')).toContainText('ゼータ零点による再構成');
+    await expect(page.locator('#rh-block-recon')).toContainText('オレンジのリボン');
+    await expect(page.locator('#rh-block-recon')).toContainText('残差 rung');
+    await expect(page.locator('#rh-block-recon')).toContainText('横木');
+    await expect(page.locator('#rh-block-recon')).toContainText('拡大表示');
+    await expect(page.locator('#rh-block-bound')).toContainText('RH を仮定した場合の誤差上限');
+    await expect(page.locator('#rh-block-bound')).toContainText('±B₁(x)');
+    await expect(page.locator('#rh-block-bound')).toContainText('面ではなく紫の輪郭線');
+    await expect(page.locator('#rh-block-bound')).toContainText('リーマン予想の証明ではありません');
+
+    // Wording constraint & no duplication of left-panel HUD / scale note / legend explanations
+    const cardText = await card.textContent();
+    for (const forbidden of [
+      '証明済み',
+      '実証',
+      '成り立つことを示して',
+      '必ずこの殻に収まる',
+      '誤差がゼロ',
+      'N を増やすほど実測',
+      'N を増やすほど残差は小さく',
+      'N を増やすと全体として',
+    ]) {
+      expect(cardText).not.toContain(forbidden);
+    }
+    expect(cardText).toContain('N が大きいほど傾向として');
+    expect(cardText).toContain('N を 1 つ増やすごとに必ず誤差が小さくなるとは限らず');
+    expect(cardText).toContain('局所的にも全体の指標でも増えることがあります');
+    expect(cardText).not.toContain('asinh');
+    expect(cardText).not.toContain('中間サンプル');
+    expect(cardText).not.toContain('最大サンプル');
+
+    const legendText = await page.locator('#explicit-legend').textContent();
+    expect(legendText).toContain('残差 rung');
+    expect(legendText).toContain('誤差上限（RH を仮定した場合）');
+    expect(legendText).not.toContain('色＝残差');
+    expect(legendText).not.toContain('拡大表示');
+    expect(legendText).not.toContain('横木は残差');
+    expect(legendText).not.toContain('x ≥ 73.2');
+    await expect(page.locator('#explicit-scale-note')).toContainText('asinh');
+    await expect(page.locator('#explicit-hud')).toContainText('中間サンプル');
+
+    // Kind switch (psi1 -> psi) syncs Block 1 & Block 3 formulas
+    await page.locator('#explicit-kind-psi').click();
+    await waitForExplicitSettled(page);
+    await expect(page.locator('#rh-block-measured-title')).toContainText('ψ(x) − x');
+    await expect(page.locator('#rh-block-bound-title')).toContainText('±B(x)');
+
+    // View switch (A -> B -> A) dims hidden blocks and updates Block 2 heading
+    await page.locator('#explicit-view-b').click();
+    await expect(page.locator('#rh-block-measured')).toHaveClass(/rh-block-muted/);
+    await expect(page.locator('#rh-block-bound')).toHaveClass(/rh-block-muted/);
+    await expect(page.locator('#rh-block-measured-title')).toContainText('ビュー B では非表示');
+    await expect(page.locator('#rh-block-bound-title')).toContainText('ビュー B では非表示');
+    await expect(page.locator('#rh-block-recon-title')).toContainText('ビュー B：打ち切り残差');
+    const viewBReconText = await page.locator('#rh-block-recon-body').textContent();
+    expect(viewBReconText).toContain('N が大きいほど傾向として');
+    expect(viewBReconText).toContain('N を 1 つ増やすごとに必ず小さくなるとは限らず');
+    expect(viewBReconText).toContain('局所的にも全体の指標でも増えることがあります');
+    expect(viewBReconText).not.toContain('N を増やすほど残差は小さく');
+    expect(viewBReconText).not.toContain('N を増やすと全体として');
+    const viewBLegendText = await page.locator('#explicit-legend').textContent();
+    expect(viewBLegendText).not.toContain('色＝残差');
+
+    await page.locator('#explicit-view-a').click();
+    await expect(page.locator('#rh-block-measured')).not.toHaveClass(/rh-block-muted/);
+    await expect(page.locator('#rh-block-bound')).not.toHaveClass(/rh-block-muted/);
+    await expect(page.locator('#rh-block-recon-body')).toContainText('残差 rung');
+
+    // Collapse to chip "解説を開く" and re-expand
+    await collapseBtn.click();
+    await expect(card).toBeHidden();
+    await expect(openBtn).toBeVisible();
+    await expect(openBtn).toHaveText('解説を開く');
+    await openBtn.click();
+    await expect(card).toBeVisible();
+    await expect(openBtn).toBeHidden();
+
+    // H key toggles both #ui-overlay and #rh-guide-panel
+    await page.keyboard.press('h');
+    await expect(page.locator('#ui-overlay')).toHaveClass(/hidden/);
+    await expect(panel).toHaveClass(/hidden/);
+    await page.keyboard.press('h');
+    await expect(page.locator('#ui-overlay')).not.toHaveClass(/hidden/);
+    await expect(panel).not.toHaveClass(/hidden/);
+
+    // Exit button returns to normal spiral without reload and hides guide panel
+    await page.evaluate(() => { window.__NO_RELOAD_MARKER__ = 'still-here'; });
+    await page.locator('#rh-exit-btn').click();
+    await expect(panel).toBeHidden();
+    await expect(page).toHaveTitle(DEFAULT_PAGE_TITLE);
+    const afterExit = await page.evaluate(() => ({
+      marker: window.__NO_RELOAD_MARKER__,
+      search: window.location.search,
+      active: window.__APP_STATE__.explicitModeActive,
+      guideVisible: window.__APP_STATE__.rhGuideVisible,
+      pointsVisible: window.__APP_STATE__.points.visible,
+    }));
+    expect(afterExit).toEqual({
+      marker: 'still-here',
+      search: '',
+      active: false,
+      guideVisible: false,
+      pointsVisible: true,
+    });
+    expect(errors).toEqual([]);
+  });
+
+  test('manual Explicit Mode toggle starts collapsed as "解説を開く" chip and expands on click (D2=A)', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = [];
+    page.on('pageerror', err => errors.push(err.message));
+
+    await page.goto('/', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+
+    const panel = page.locator('#rh-guide-panel');
+    const card = page.locator('#rh-guide-card');
+    const openBtn = page.locator('#rh-guide-open-btn');
+
+    // Hidden on normal startup
+    await expect(panel).toBeHidden();
+
+    // Manual toggle ON -> collapsed chip "解説を開く"
+    await page.locator('#group-explicit-toggle .toggle-row').click();
+    await waitForExplicitSettled(page);
+
+    await expect(panel).toBeVisible();
+    await expect(openBtn).toBeVisible();
+    await expect(openBtn).toHaveText('解説を開く');
+    await expect(card).toBeHidden();
+    const collapsedState = await page.evaluate(() => ({
+      visible: window.__APP_STATE__.rhGuideVisible,
+      collapsed: window.__APP_STATE__.rhGuideCollapsed,
+    }));
+    expect(collapsedState).toEqual({ visible: true, collapsed: true });
+
+    // Click chip -> expands full 3-block card with N synced
+    await openBtn.click();
+    await expect(card).toBeVisible();
+    await expect(openBtn).toBeHidden();
+    await expect(page.locator('#rh-guide-n-val')).toHaveText('100');
+    await expect(page.locator('#rh-guide-blocks .rh-guide-block')).toHaveCount(3);
+    await expect(page.locator('#rh-guide-sweep-btn')).not.toHaveAttribute('aria-pressed');
+
+    // Sweep button inside guide card triggers sweep and syncs with left panel
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
+    await page.locator('#rh-guide-sweep-btn').click();
+    await expect.poll(
+      async () => page.evaluate(() => ({
+        sweepState: window.__APP_STATE__.explicitSweepState,
+        N: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N,
+      })),
+      { timeout: 30_000, message: 'Sweep started from guide card should finish at N=1000' },
+    ).toEqual({ sweepState: 'done', N: 1000 });
+    await expect(page.locator('#rh-guide-n-val')).toHaveText('1000');
+    await expect(page.locator('#rh-guide-sweep-btn')).toHaveText('↺ もう一度再生');
+    await expect(page.locator('#explicit-sweep-btn')).toHaveText('↺ もう一度再生');
+
+    // Manual toggle OFF hides the guide panel cleanly
+    await page.locator('#group-explicit-toggle .toggle-row').click();
+    await expect(panel).toBeHidden();
+    expect(errors).toEqual([]);
+  });
+
+  test('narrow viewport (390x844) starts collapsed as chip even on dedicated entry without covering controls', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = [];
+    page.on('pageerror', err => errors.push(err.message));
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/?mode=explicit&sweep=0', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+    await waitForExplicitSettled(page);
+
+    const panel = page.locator('#rh-guide-panel');
+    const card = page.locator('#rh-guide-card');
+    const openBtn = page.locator('#rh-guide-open-btn');
+    const collapseBtn = page.locator('#rh-guide-collapse-btn');
+
+    // Starts collapsed as chip on narrow viewport (<= 480px) even from dedicated entry
+    await expect(panel).toBeVisible();
+    await expect(openBtn).toBeVisible();
+    await expect(openBtn).toHaveText('解説を開く');
+    await expect(card).toBeHidden();
+    const initState = await page.evaluate(() => ({
+      visible: window.__APP_STATE__.rhGuideVisible,
+      collapsed: window.__APP_STATE__.rhGuideCollapsed,
+    }));
+    expect(initState).toEqual({ visible: true, collapsed: true });
+
+    // Chip does not overlap #ui-overlay and left controls receive pointer hits directly
+    const layout = await page.evaluate(() => {
+      const ui = document.getElementById('ui-overlay');
+      const uiRect = ui.getBoundingClientRect();
+      const chipRect = document.getElementById('rh-guide-open-btn').getBoundingClientRect();
+      const overlapW = Math.max(0, Math.min(uiRect.right, chipRect.right) - Math.max(uiRect.left, chipRect.left));
+      const overlapH = Math.max(0, Math.min(uiRect.bottom, chipRect.bottom) - Math.max(uiRect.top, chipRect.top));
+
+      const slider = document.getElementById('zeta-n-slider');
+      slider.scrollIntoView({ block: 'center' });
+      const sRect = slider.getBoundingClientRect();
+      const sliderHit = document.elementFromPoint(sRect.left + sRect.width / 2, sRect.top + sRect.height / 2);
+
+      const viewB = document.getElementById('explicit-view-b');
+      viewB.scrollIntoView({ block: 'center' });
+      const vRect = viewB.getBoundingClientRect();
+      const viewBHit = document.elementFromPoint(vRect.left + vRect.width / 2, vRect.top + vRect.height / 2);
+
+      return {
+        overlapArea: overlapW * overlapH,
+        sliderCoveredByGuide: Boolean(sliderHit && sliderHit.closest('#rh-guide-panel')),
+        viewBCoveredByGuide: Boolean(viewBHit && viewBHit.closest('#rh-guide-panel')),
+        sliderHitInsideUi: Boolean(sliderHit && sliderHit.closest('#ui-overlay')),
+        viewBHitInsideUi: Boolean(viewBHit && viewBHit.closest('#ui-overlay')),
+      };
+    });
+    expect(layout).toEqual({
+      overlapArea: 0,
+      sliderCoveredByGuide: false,
+      viewBCoveredByGuide: false,
+      sliderHitInsideUi: true,
+      viewBHitInsideUi: true,
+    });
+
+    // Left controls are directly usable without collapsing anything first
+    await page.locator('#explicit-view-b').click();
+    await expect(page.locator('#explicit-view-b')).toHaveClass(/active/);
+
+    // User can still expand and re-collapse the guide card from the chip
+    await openBtn.click();
+    await expect(card).toBeVisible();
+    await expect(openBtn).toBeHidden();
+    await collapseBtn.click();
+    await expect(card).toBeHidden();
+    await expect(openBtn).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+});

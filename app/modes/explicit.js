@@ -230,6 +230,56 @@ function setSegButton(id, active) {
     el.setAttribute('aria-pressed', active ? 'true' : 'false');
 }
 
+function syncRhGuidePanel(kind, view) {
+    if (typeof document === 'undefined') return;
+    const isPsi = kind === 'psi';
+    const isViewB = view === 'b';
+    const boundSym = isPsi ? 'B(x)' : 'B₁(x)';
+    const fluctLabel = isPsi ? 'ψ(x) − x' : 'ψ₁(x) − x²/2';
+    const trendLabel = isPsi ? 'x' : 'x²/2';
+    const xMaxStr = currentXMax().toLocaleString('en-US');
+
+    const nEl = document.getElementById('rh-guide-n-val');
+    if (nEl) nEl.textContent = String(state.zetaZeroCount);
+
+    const measBlock = document.getElementById('rh-block-measured');
+    if (measBlock) measBlock.classList.toggle('rh-block-muted', isViewB);
+    const measTitle = document.getElementById('rh-block-measured-title');
+    if (measTitle) {
+        measTitle.textContent = `1. 実測のゆらぎ ${fluctLabel}${isViewB ? '（ビュー B では非表示）' : ''}`;
+    }
+    const measBody = document.getElementById('rh-block-measured-body');
+    if (measBody) {
+        measBody.textContent =
+            `素数（と素数べき）の分布から直接計算した、平均的な増加傾向 ${trendLabel} からの「ずれ」です。中心の灰色らせんが基準線（ずれ 0）で、シアン線が実測値を表します。`;
+    }
+
+    const reconTitle = document.getElementById('rh-block-recon-title');
+    if (reconTitle) {
+        reconTitle.textContent = isViewB
+            ? '2. ゼータ零点による再構成（ビュー B：打ち切り残差）'
+            : '2. ゼータ零点による再構成';
+    }
+    const reconBody = document.getElementById('rh-block-recon-body');
+    if (reconBody) {
+        reconBody.textContent = isViewB
+            ? '実測と N 個の零点による再構成の差（打ち切り残差）を直接描いたオレンジ〜赤のリボンです。N が大きいほど傾向として再構成は実測に近づき残差は小さくなりますが、N を 1 つ増やすごとに必ず小さくなるとは限らず、局所的にも全体の指標でも増えることがあります。帯の色は残差が大きいほど赤く染まります。'
+            : 'リーマンゼータ関数の非自明な零点を低い方から N 個だけ重ねたオレンジのリボンです。N が大きいほど傾向として実測（シアン線）へ近づきますが、N を 1 つ増やすごとに必ず誤差が小さくなるとは限らず、局所的にも全体の指標でも増えることがあります。帯の色は残差が大きいほど赤くなり、シアン線との間を結ぶ白い残差 rung（横木）は実測と再構成の差を拡大表示した目印です。';
+    }
+
+    const boundBlock = document.getElementById('rh-block-bound');
+    if (boundBlock) boundBlock.classList.toggle('rh-block-muted', isViewB);
+    const boundTitle = document.getElementById('rh-block-bound-title');
+    if (boundTitle) {
+        boundTitle.textContent = `3. RH を仮定した場合の誤差上限 ±${boundSym}${isViewB ? '（ビュー B では非表示）' : ''}`;
+    }
+    const boundBody = document.getElementById('rh-block-bound-body');
+    if (boundBody) {
+        boundBody.textContent =
+            `もしリーマン予想（RH）が正しいと仮定した場合に成り立つ理論上の誤差上限（Schoenfeld の上限、x ≥ 73.2）を、面ではなく紫の輪郭線（上下の境界線と等間隔リングの殻）で示しています。実測がこの輪郭の内側にあるのは表示範囲（x ≤ ${xMaxStr}）での観測であり、リーマン予想の証明ではありません。`;
+    }
+}
+
 function renderExplicitPanel() {
     if (typeof document === 'undefined') return;
     const kind = currentKind();
@@ -267,20 +317,20 @@ function renderExplicitPanel() {
     const legRibbon = document.getElementById('explicit-legend-ribbon');
     if (legRibbon) {
         legRibbon.innerHTML = isViewB
-            ? '<span style="color:#ffaa33" aria-hidden="true">━</span> 打ち切り残差（実測 − 再構成）（色＝残差の大きさ）'
-            : '<span style="color:#ffaa33" aria-hidden="true">━</span> N 個の零点による再構成（色＝残差の大きさ）';
+            ? '<span style="color:#ffaa33" aria-hidden="true">━</span> 打ち切り残差（実測 − 再構成）'
+            : '<span style="color:#ffaa33" aria-hidden="true">━</span> N 個の零点による再構成';
     }
     const legRungs = document.getElementById('explicit-legend-rungs');
     if (legRungs) {
         legRungs.hidden = isViewB;
-        legRungs.innerHTML = '<span style="color:#eef4ff" aria-hidden="true">│</span> 残差 rung（実測と再構成の差。横木は残差を拡大表示）';
+        legRungs.innerHTML = '<span style="color:#eef4ff" aria-hidden="true">│</span> 残差 rung';
     }
     const legShell = document.getElementById('explicit-legend-shell');
     if (legShell) {
         legShell.style.opacity = isViewB ? '0.45' : '1';
         legShell.innerHTML = isViewB
-            ? `<span style="color:#8866ff" aria-hidden="true">◯</span> 誤差上限（RH を仮定した場合）±${boundSym}：ビュー B では自動非表示（上限は真のゆらぎ用）`
-            : `<span style="color:#8866ff" aria-hidden="true">◯</span> 誤差上限（RH を仮定した場合）±${boundSym}、x ≥ 73.2`;
+            ? `<span style="color:#8866ff" aria-hidden="true">◯</span> 誤差上限（RH を仮定した場合）±${boundSym}（ビュー B 非表示）`
+            : `<span style="color:#8866ff" aria-hidden="true">◯</span> 誤差上限（RH を仮定した場合）±${boundSym}`;
     }
 
     const scaleNote = document.getElementById('explicit-scale-note');
@@ -290,6 +340,8 @@ function renderExplicitPanel() {
         scaleNote.textContent =
             `表示は圧縮スケール：v/${denomStr} で正規化後 asinh(u/${scale}) 圧縮。長さは誤差に比例せず、|v| ≤ ${boundSym} の大小関係のみ保存されます。`;
     }
+
+    syncRhGuidePanel(kind, view);
 
     const hudEl = document.getElementById('explicit-hud');
     if (!hudEl) return;
@@ -736,9 +788,11 @@ function syncNControl() {
     const slider = document.getElementById('zeta-n-slider');
     const val = document.getElementById('zeta-n-val');
     const note = document.getElementById('zeta-n-note');
+    const guideN = document.getElementById('rh-guide-n-val');
     if (slider) { slider.max = String(ZETA_ZEROS.length); slider.value = String(state.zetaZeroCount); }
     if (val) val.innerText = state.zetaZeroCount;
     if (note) note.textContent = '';
+    if (guideN) guideN.textContent = String(state.zetaZeroCount);
 }
 
 // Zeta Wave is off: just put the shared slider/label back to the restored N.
@@ -758,12 +812,24 @@ onWorkerFailure(() => {
     }
 });
 
+const RH_GUIDE_NARROW_MAX_WIDTH = 480;
+
+function isNarrowViewport() {
+    if (typeof window === 'undefined') return false;
+    if (typeof window.matchMedia === 'function') {
+        return window.matchMedia(`(max-width: ${RH_GUIDE_NARROW_MAX_WIDTH}px)`).matches;
+    }
+    return typeof window.innerWidth === 'number' && window.innerWidth <= RH_GUIDE_NARROW_MAX_WIDTH;
+}
+
 export const explicitMode = {
     id: 'explicit',
     kind: 'owner',
     enter(opts = {}) {
         state.explicitModeActive = true;
         launchedFromUrl = Boolean(opts && opts.fromLaunch);
+        state.rhGuideVisible = true;
+        state.rhGuideCollapsed = !launchedFromUrl || isNarrowViewport();
         const shouldAutoSweep = Boolean(opts && opts.autoSweep);
         const sweepDelayMs = (opts && typeof opts.sweepDelayMs === 'number')
             ? opts.sweepDelayMs
@@ -804,6 +870,8 @@ export const explicitMode = {
     exit(opts = {}) {
         stopExplicitSweep();
         state.explicitModeActive = false;
+        state.rhGuideVisible = false;
+        state.rhGuideCollapsed = false;
         const wasLaunchedFromUrl = launchedFromUrl;
         launchedFromUrl = false;
         token++;

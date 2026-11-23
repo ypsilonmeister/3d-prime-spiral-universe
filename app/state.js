@@ -91,6 +91,8 @@ export const state = {
     explicitSweeping: false,
     explicitSweepState: 'idle', // 'idle' | 'running' | 'paused' | 'done'
     explicitSweepIntervalScale: 1, // test/debug scale factor for sweep step intervals (1 = normal ~10.5s)
+    rhGuideVisible: false,
+    rhGuideCollapsed: false,
     explicitInfo: null, // read-only snapshot of the latest computation (M, N, kind, view, rms, hud, shell ring xs, primeCount, primesVisible, fallback flag)
 
     // Math buffers loaded from worker

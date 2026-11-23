@@ -134,9 +134,9 @@
                 <div><span style="color:#777777" aria-hidden="true">━</span> 基準軸</div>
                 <div id="explicit-legend-primes"><span style="color:#f4f7ff" aria-hidden="true">•</span> 素数（基準軸上）</div>
                 <div id="explicit-legend-measured"><span style="color:#00f2ff" aria-hidden="true">━</span> 実測 ψ₁(x) − x²/2</div>
-                <div id="explicit-legend-ribbon"><span style="color:#ffaa33" aria-hidden="true">━</span> N 個の零点による再構成（色＝残差の大きさ）</div>
-                <div id="explicit-legend-rungs"><span style="color:#eef4ff" aria-hidden="true">│</span> 残差 rung（実測と再構成の差。横木は残差を拡大表示）</div>
-                <div id="explicit-legend-shell"><span style="color:#8866ff" aria-hidden="true">◯</span> 誤差上限（RH を仮定した場合）±B₁(x)、x ≥ 73.2</div>
+                <div id="explicit-legend-ribbon"><span style="color:#ffaa33" aria-hidden="true">━</span> N 個の零点による再構成</div>
+                <div id="explicit-legend-rungs"><span style="color:#eef4ff" aria-hidden="true">│</span> 残差 rung</div>
+                <div id="explicit-legend-shell"><span style="color:#8866ff" aria-hidden="true">◯</span> 誤差上限（RH を仮定した場合）±B₁(x)</div>
             </div>
             <div id="explicit-scale-note" style="opacity:.7;margin-top:4px;">表示は圧縮スケール：v/x^{3/2} で正規化後 asinh(u/0.02) 圧縮。長さは誤差に比例せず、|v| ≤ B₁(x) の大小関係のみ保存されます。</div>
 
@@ -393,6 +393,52 @@
             Current State: <span id="current-state-text" class="status">Cubic - Sphere</span>
         </div>
     </div>
+
+    <aside id="rh-guide-panel" class="rh-guide-panel" aria-label="リーマン予想と素数 解説パネル" hidden>
+        <button type="button" id="rh-guide-open-btn" class="rh-guide-chip" aria-expanded="false" aria-controls="rh-guide-card" hidden>解説を開く</button>
+        <div id="rh-guide-card" class="rh-guide-card">
+            <div class="rh-guide-header">
+                <h2 class="rh-guide-title">リーマン予想と素数（明示公式）</h2>
+                <button type="button" id="rh-guide-collapse-btn" class="rh-guide-collapse-btn" aria-label="解説を折りたたむ" aria-expanded="true" aria-controls="rh-guide-card" title="解説を折りたたむ">−</button>
+            </div>
+            <p class="rh-guide-subtitle">素数の並びの「ゆらぎ」を、ゼータ関数の零点の波でどこまで再現できるかを 3D 螺旋上に描いています。</p>
+
+            <div class="rh-guide-sweep-bar">
+                <span class="rh-guide-n">零点数 N: <strong id="rh-guide-n-val">0</strong> / 1000</span>
+                <button type="button" id="rh-guide-sweep-btn" class="explicit-sweep-btn rh-guide-sweep-btn">▶ N スイープ</button>
+            </div>
+
+            <div id="rh-guide-blocks" class="rh-guide-blocks">
+                <section id="rh-block-measured" class="rh-guide-block" data-rh-block="measured">
+                    <div class="rh-block-head">
+                        <span class="rh-swatch rh-swatch-measured" aria-hidden="true"></span>
+                        <h3 id="rh-block-measured-title" class="rh-block-title">1. 実測のゆらぎ ψ₁(x) − x²/2</h3>
+                    </div>
+                    <p id="rh-block-measured-body" class="rh-block-body">素数（と素数べき）の分布から直接計算した、平均的な増加傾向 x²/2 からの「ずれ」です。中心の灰色らせんが基準線（ずれ 0）で、シアン線が実測値を表します。</p>
+                </section>
+
+                <section id="rh-block-recon" class="rh-guide-block" data-rh-block="recon">
+                    <div class="rh-block-head">
+                        <span class="rh-swatch rh-swatch-recon" aria-hidden="true"></span>
+                        <h3 id="rh-block-recon-title" class="rh-block-title">2. ゼータ零点による再構成</h3>
+                    </div>
+                    <p id="rh-block-recon-body" class="rh-block-body">リーマンゼータ関数の非自明な零点を低い方から N 個だけ重ねたオレンジのリボンです。N が大きいほど傾向として実測（シアン線）へ近づきますが、N を 1 つ増やすごとに必ず誤差が小さくなるとは限らず、局所的にも全体の指標でも増えることがあります。帯の色は残差が大きいほど赤くなり、シアン線との間を結ぶ白い残差 rung（横木）は実測と再構成の差を拡大表示した目印です。</p>
+                </section>
+
+                <section id="rh-block-bound" class="rh-guide-block" data-rh-block="bound">
+                    <div class="rh-block-head">
+                        <span class="rh-swatch rh-swatch-bound" aria-hidden="true"></span>
+                        <h3 id="rh-block-bound-title" class="rh-block-title">3. RH を仮定した場合の誤差上限 ±B₁(x)</h3>
+                    </div>
+                    <p id="rh-block-bound-body" class="rh-block-body">もしリーマン予想（RH）が正しいと仮定した場合に成り立つ理論上の誤差上限（Schoenfeld の上限、x ≥ 73.2）を、面ではなく紫の輪郭線（上下の境界線と等間隔リングの殻）で示しています。実測がこの輪郭の内側にあるのは表示範囲（x ≤ 320,000）での観測であり、リーマン予想の証明ではありません。</p>
+                </section>
+            </div>
+
+            <div class="rh-guide-footer">
+                <button type="button" id="rh-exit-btn" class="rh-exit-btn">← 通常の 3D 素数スパイラルへ</button>
+            </div>
+        </div>
+    </aside>
     
     <div id="show-ui-hint" style="opacity: 0;">Double Tap or Press 'H' to show menu</div>
 

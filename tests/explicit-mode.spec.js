@@ -1274,9 +1274,11 @@ test.describe('explicit formula mode', () => {
     expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo['explicit-ribbon'].renderOrder);
     expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo['explicit-rungs'].renderOrder);
 
-    // Legend notes that residual rungs are magnified in View A
+    // Legend keeps concise symbol index for rungs in View A; detailed magnification note lives in the explanation panel
     await expect(page.locator('#explicit-legend-rungs')).toBeVisible();
-    await expect(page.locator('#explicit-legend-rungs')).toContainText('横木は残差を拡大表示');
+    await expect(page.locator('#explicit-legend-rungs')).toContainText('残差 rung');
+    await expect(page.locator('#explicit-legend-rungs')).not.toContainText('拡大表示');
+    await expect(page.locator('#rh-block-recon-body')).toContainText('拡大表示');
 
     // 2. Measure rung length (3D + projected px at default camera) and default-view pixel diff across N = 10 -> 100 -> 1000
     const measureRungs = () => page.evaluate(async () => {

@@ -627,3 +627,295 @@ button.active {
     font-variant-numeric: tabular-nums;
     color: #b8eaff;
 }
+
+/* RH / Explicit Formula floating guide card (top-right) */
+#rh-guide-panel {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 2;
+    width: 300px;
+    max-width: calc(100vw - 236px);
+    max-height: calc(100dvh - 16px);
+    pointer-events: auto;
+    font-family: 'Segoe UI', 'Hiragino Kaku Gothic ProN', 'Yu Gothic UI', sans-serif;
+    transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.4s ease;
+}
+
+#rh-guide-panel.collapsed {
+    width: auto;
+    max-width: calc(100vw - 16px);
+}
+
+#rh-guide-panel.hidden {
+    transform: translateX(120%);
+    opacity: 0;
+    pointer-events: none;
+}
+
+#rh-guide-panel[hidden],
+#rh-guide-card[hidden],
+#rh-guide-open-btn[hidden] {
+    display: none;
+}
+
+.rh-guide-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    border-radius: 999px;
+    background: rgba(10, 10, 20, 0.78);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(0, 242, 255, 0.45);
+    color: #c8f7ff;
+    font-family: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.75), 0 0 12px rgba(0, 242, 255, 0.16);
+}
+
+.rh-guide-chip:hover {
+    background: rgba(0, 242, 255, 0.18);
+    border-color: #00f2ff;
+    color: #ffffff;
+}
+
+.rh-guide-chip:focus-visible,
+.rh-guide-collapse-btn:focus-visible,
+.rh-exit-btn:focus-visible {
+    outline: 2px solid #00f2ff;
+    outline-offset: 2px;
+}
+
+.rh-guide-card {
+    box-sizing: border-box;
+    max-height: calc(100dvh - 16px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: rgba(10, 10, 20, 0.72);
+    backdrop-filter: blur(12px);
+    padding: 12px 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(0, 242, 255, 0.28);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.82);
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 242, 255, 0.3) transparent;
+}
+
+.rh-guide-card::-webkit-scrollbar {
+    width: 4px;
+}
+.rh-guide-card::-webkit-scrollbar-track {
+    background: transparent;
+}
+.rh-guide-card::-webkit-scrollbar-thumb {
+    background: rgba(0, 242, 255, 0.3);
+    border-radius: 2px;
+}
+
+.rh-guide-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.rh-guide-title {
+    margin: 0;
+    font-size: 0.82rem;
+    font-weight: 700;
+    line-height: 1.35;
+    color: #00f2ff;
+    text-shadow: 0 0 8px rgba(0, 242, 255, 0.35);
+}
+
+.rh-guide-collapse-btn {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    line-height: 1;
+    border-radius: 5px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(0, 242, 255, 0.25);
+    color: #c8f7ff;
+    font-size: 0.9rem;
+}
+
+.rh-guide-collapse-btn:hover {
+    background: rgba(0, 242, 255, 0.18);
+    border-color: #00f2ff;
+    color: #ffffff;
+}
+
+.rh-guide-subtitle {
+    margin: 0 0 8px 0;
+    font-size: 0.7rem;
+    line-height: 1.5;
+    color: rgba(224, 232, 245, 0.82);
+}
+
+.rh-guide-sweep-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    margin-bottom: 10px;
+    border-radius: 6px;
+    background: rgba(0, 242, 255, 0.06);
+    border: 1px solid rgba(0, 242, 255, 0.18);
+}
+
+.rh-guide-n {
+    font-size: 0.7rem;
+    color: #c8f7ff;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.rh-guide-sweep-btn {
+    width: auto;
+    min-block-size: 24px;
+    padding: 3px 9px;
+    font-size: 0.66rem;
+    white-space: nowrap;
+}
+
+.rh-guide-blocks {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.rh-guide-block {
+    padding: 8px 9px;
+    border-radius: 7px;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    transition: opacity 0.2s ease;
+}
+
+.rh-guide-block.rh-block-muted {
+    opacity: 0.5;
+}
+
+.rh-block-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-bottom: 4px;
+}
+
+.rh-block-title {
+    margin: 0;
+    font-size: 0.74rem;
+    font-weight: 700;
+    line-height: 1.35;
+    color: #f0f6ff;
+}
+
+.rh-block-body {
+    margin: 0;
+    font-size: 0.69rem;
+    line-height: 1.55;
+    color: rgba(224, 232, 245, 0.88);
+}
+
+.rh-swatch {
+    flex-shrink: 0;
+    display: inline-block;
+}
+
+.rh-swatch-measured {
+    width: 14px;
+    height: 3px;
+    border-radius: 2px;
+    background: #00f2ff;
+    box-shadow: 0 0 6px rgba(0, 242, 255, 0.7);
+}
+
+.rh-swatch-recon {
+    width: 14px;
+    height: 6px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #ffaa33, #ff2d55);
+}
+
+.rh-swatch-bound {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid #8866ff;
+    box-sizing: border-box;
+    background: transparent;
+}
+
+.rh-guide-footer {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.rh-exit-btn {
+    width: 100%;
+    padding: 6px 10px;
+    font-family: inherit;
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: #c8f7ff;
+    background: rgba(0, 242, 255, 0.08);
+    border: 1px solid rgba(0, 242, 255, 0.32);
+    border-radius: 6px;
+}
+
+.rh-exit-btn:hover {
+    background: rgba(0, 242, 255, 0.2);
+    border-color: #00f2ff;
+    color: #ffffff;
+}
+
+@media (max-width: 640px) {
+    #rh-guide-panel {
+        top: auto;
+        bottom: 8px;
+        right: 8px;
+        left: 8px;
+        width: auto;
+        max-width: none;
+        max-height: 46dvh;
+    }
+
+    #rh-guide-panel.collapsed {
+        left: auto;
+        top: 8px;
+        bottom: auto;
+    }
+
+    .rh-guide-card {
+        max-height: 46dvh;
+        padding: 10px 12px;
+    }
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+    #rh-guide-panel {
+        top: 4px;
+        right: 4px;
+        width: 260px;
+        max-height: calc(100dvh - 8px);
+    }
+
+    .rh-guide-card {
+        max-height: calc(100dvh - 8px);
+        padding: 8px 10px;
+    }
+
+    .rh-block-body {
+        font-size: 0.64rem;
+        line-height: 1.45;
+    }
+}

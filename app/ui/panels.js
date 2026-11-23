@@ -11,7 +11,8 @@ export function initElements() {
         'layout-select', 'fillmode-select', 'color-select', 'type-panel', 'type-list',
         'sw-labels', 'sw-autogrow', 'stereo-select', 'stride-section', 'stride-val',
         'stride-slider', 'sw-zeta', 'zeta-controls', 'zeta-n-val', 'zeta-n-slider',
-        'zeta-amp-val', 'zeta-amp-slider', 'zeta-anim-btn', 'sw-padic', 'padic-controls',
+        'zeta-amp-val', 'zeta-amp-slider', 'zeta-anim-btn',
+        'zeta-progress-wrap', 'zeta-progress', 'zeta-progress-text', 'sw-padic', 'padic-controls',
         'padic-p-val', 'padic-p-select', 'sw-padic-color', 'padic-anim-btn', 'sw-primedim',
         'primedim-controls', 'primedim-x-select', 'primedim-y-select', 'primedim-z-select',
         'sw-primedim-only', 'sw-ntl', 'ntl-controls', 'ntl-func-select', 'ntl-scale-val',
@@ -76,6 +77,31 @@ export function onSieveUIUpdate() {
     const btn = elements['sieve-play-btn'];
     if (btn) btn.textContent = state.sievePlaying ? '⏸ Pause' : '▶ Play';
     onSieveProgress(state.sieveFinished, state.sieveFoundCount, state.sieveLimit, state.sieveCurrentP);
+}
+
+export function onZetaProgress({ active = false, doneK = 0, targetN = 0, pct = 0 } = {}) {
+    const wrap = elements['zeta-progress-wrap'];
+    const prog = elements['zeta-progress'];
+    const text = elements['zeta-progress-text'];
+    if (!wrap) return;
+    const visible = Boolean(
+        active
+        && state.zetaModeActive
+        && !state.explicitModeActive
+        && !state.padicModeActive
+        && !state.primeDimModeActive
+        && !state.sieveModeActive
+    );
+    if (!visible) {
+        if (wrap.style.display !== 'none') wrap.style.display = 'none';
+        if (prog && prog.value !== 0) prog.value = 0;
+        if (text && text.textContent !== '') text.textContent = '';
+        return;
+    }
+    const clampedPct = Math.max(0, Math.min(100, pct));
+    wrap.style.display = '';
+    if (prog) prog.value = clampedPct;
+    if (text) text.textContent = `Computing zeros… ${doneK} / ${targetN} (${Math.round(clampedPct)}%)`;
 }
 
 export function hideBootOverlay() {
@@ -168,6 +194,17 @@ export function updateUI() {
     // Amplitude / Animate only apply to the zeta wave overlay; explicit mode shares just the N slider.
     const waveOnly = document.getElementById('zeta-wave-only');
     if (waveOnly) waveOnly.style.display = state.zetaModeActive ? '' : 'none';
+    const zetaProgressWrap = elements['zeta-progress-wrap'];
+    if (zetaProgressWrap && (
+        !state.zetaComputing
+        || !state.zetaModeActive
+        || state.explicitModeActive
+        || state.padicModeActive
+        || state.primeDimModeActive
+        || state.sieveModeActive
+    )) {
+        zetaProgressWrap.style.display = 'none';
+    }
     if (elements['sw-explicit']) elements['sw-explicit'].classList.toggle('on', state.explicitModeActive);
     const expCtl = document.getElementById('explicit-controls');
     if (expCtl) expCtl.style.display = state.explicitModeActive ? '' : 'none';

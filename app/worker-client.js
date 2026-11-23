@@ -6,6 +6,7 @@ let _worker = null;
 let _workerReady = false;
 let _zetaReqId = 0;
 let _zetaResolveLast = null; // resolver for the latest in-flight zeta request
+let _onZetaProgress = null;  // UI callback for stage:'zeta' progress updates
 let _explicitReqId = 0;
 const _explicitPending = new Map(); // reqId -> { resolve, reject }
 const _failureListeners = [];
@@ -13,6 +14,19 @@ const _failureListeners = [];
 // Called (once per failure) after the worker died post-startup and its in-flight work was dropped.
 export function onWorkerFailure(cb) {
     _failureListeners.push(cb);
+}
+
+export function setZetaProgressCallback(cb) {
+    _onZetaProgress = cb;
+}
+
+function resetZetaProgress() {
+    state.zetaComputing = false;
+    state.zetaTargetN = 0;
+    state.zetaProgressPct = 0;
+    if (_onZetaProgress) {
+        _onZetaProgress({ active: false, doneK: state.zetaComputedN, targetN: 0, pct: 0 });
+    }
 }
 
 const EXPLICIT_TIMEOUT_MS = 20000;   // no reply in this long => treat the worker as dead (no onerror needed)
@@ -47,7 +61,24 @@ export function initWorker(onProgress) {
         _worker.onmessage = (e) => {
             const m = e.data;
             if (m.type === 'progress') {
-                if (onProgress) {
+                if (m.stage === 'zeta') {
+                    // Drop stale progress from cancelled/superseded zeta requests.
+                    if (m.reqId === _zetaReqId) {
+                        state.zetaComputing = true;
+                        state.zetaComputedN = m.doneK;
+                        state.zetaTargetN = m.targetN;
+                        state.zetaProgressPct = m.pct;
+                        if (_onZetaProgress) {
+                            _onZetaProgress({
+                                active: true,
+                                doneK: m.doneK,
+                                startK: m.startK,
+                                targetN: m.targetN,
+                                pct: m.pct,
+                            });
+                        }
+                    }
+                } else if (onProgress) {
                     onProgress(m.stage, m.pct);
                 }
             } else if (m.type === 'init_done') {
@@ -69,6 +100,14 @@ export function initWorker(onProgress) {
                 if (m.reqId === _zetaReqId) {
                     state.zetaOffsets = m.offsets;       // normalized (visual)
                     state.zetaOffsetsRaw = m.rawOffsets; // unnormalized sum
+                    const doneN = typeof m.N === 'number' ? m.N : state.zetaZeroCount;
+                    state.zetaComputedN = doneN;
+                    state.zetaComputing = false;
+                    state.zetaTargetN = doneN;
+                    state.zetaProgressPct = 0;
+                    if (_onZetaProgress) {
+                        _onZetaProgress({ active: false, doneK: doneN, targetN: doneN, pct: 0 });
+                    }
                     if (_zetaResolveLast) {
                         _zetaResolveLast(true);
                         _zetaResolveLast = null;
@@ -80,20 +119,26 @@ export function initWorker(onProgress) {
     });
 }
 
-export function cancelPendingZetaRequests() {
+export function cancelPendingZetaRequests({ notifyWorker = true } = {}) {
     _zetaReqId++;
+    const hadInFlight = _zetaResolveLast !== null;
     if (_zetaResolveLast) {
         _zetaResolveLast(false);
         _zetaResolveLast = null;
     }
+    if (notifyWorker && hadInFlight && _worker && _workerReady) {
+        _worker.postMessage({ type: 'zeta_cancel' });
+    }
+    resetZetaProgress();
 }
 
 // Request a zeta offset recompute. Returns a promise that resolves when the latest request lands.
 // Older in-flight requests are abandoned (their reqId won't match).
 export function requestZetaOffsets(N, amplitude, spacing) {
     // cancelPendingZetaRequests already bumps _zetaReqId, giving this request a
-    // fresh id that supersedes any in-flight one.
-    cancelPendingZetaRequests();
+    // fresh id that supersedes any in-flight one. The incoming 'zeta' message
+    // cancels any active worker job directly, so no separate 'zeta_cancel' is needed.
+    cancelPendingZetaRequests({ notifyWorker: false });
     const id = _zetaReqId;
     return new Promise(resolve => {
         _zetaResolveLast = ok => resolve(ok === true);

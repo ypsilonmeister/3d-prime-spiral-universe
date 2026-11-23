@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import { state } from './state.js';
-import { initWorker, isWorkerReady, setWorkerReady } from './worker-client.js';
+import { initWorker, isWorkerReady, setWorkerReady, setZetaProgressCallback } from './worker-client.js';
 import { buildSieve } from '../shared/sieve.js';
 import { computeNtlTables } from '../shared/arithmetic.js';
 
@@ -13,7 +13,7 @@ import { animate, setFrameTickCallback, setSieveTickCallback } from './render/lo
 
 import {
     initElements, getElement, setBootStage, hideBootOverlay, buildTypeUI, updateUI, setupHelpTooltips,
-    onBootProgress, onSieveProgress, onSieveUIUpdate
+    onBootProgress, onSieveProgress, onSieveUIUpdate, onZetaProgress
 } from './ui/panels.js';
 import { bindUIEvents, toggleType } from './ui/bindings.js';
 
@@ -125,6 +125,7 @@ function init() {
     setFrameTickCallback(updateUI);
     setSieveTickCallback(sieveTick);
     setSieveCallbacks(onSieveProgress, onSieveUIUpdate);
+    setZetaProgressCallback(onZetaProgress);
 
     initModeManager();
     setUIDisabledStateUpdateCallback(updateUI);

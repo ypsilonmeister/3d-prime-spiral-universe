@@ -76,6 +76,10 @@ export const state = {
     zetaAmplitude: 1.0,
     zetaAnimating: false,
     zetaAnimFrame: null,
+    zetaComputing: false,
+    zetaComputedN: 0,
+    zetaTargetN: 0,
+    zetaProgressPct: 0,
     zetaOffsets: new Float32Array(320000),
     zetaOffsetsRaw: new Float32Array(320000), // unnormalized -sum 2Re(x^rho/rho), from worker
 

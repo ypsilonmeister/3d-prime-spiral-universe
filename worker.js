@@ -15,13 +15,21 @@ import {
     buildPsiTables, computeExplicitBase, computeExplicitRecon, logSpacedSamples,
 } from './shared/explicit-formula.js';
 
+const ZETA_CHUNK_K = 20;
+
 let MAX = 0;
 let _lnCache = null;
 let _sqrtCache = null;
 let _zetaDenom = null;
-// Cache of the unnormalized zero sum: S (Float64 positive partial sum, raw = -2S), raw (Float32), maxAbs.
+// Cache of the unnormalized zero sum:
+//   N:      exact number of zeros accumulated into S (k = 0..N-1)
+//   S:      Float64Array(MAX), positive partial sum (raw = -2S)
+//   raw:    Float32Array(MAX) | null (materialized lazily when emitting results)
+//   maxAbs: max |raw[i]| (valid when raw !== null)
 // Valid for the current MAX and cached N only; amplitude/spacing never invalidate it.
 let _zetaCache = null;
+// Active chunked zeta job (at most one): { reqId, startK, curK, targetN, amplitude, spacing, S, timerId }.
+let _zetaJob = null;
 let _spf = null;       // smallest-prime-factor table kept for the explicit-formula mode
 let _psiTables = null; // buildPsiTables(MAX, _spf), built lazily
 let _explicitXs = null; // samples of the latest explicit_base request (xMax, M, xs)
@@ -30,7 +38,15 @@ function progress(stage, pct) {
     self.postMessage({ type: 'progress', stage, pct });
 }
 
+function cancelZetaJob() {
+    if (_zetaJob) {
+        if (_zetaJob.timerId !== null) clearTimeout(_zetaJob.timerId);
+        _zetaJob = null;
+    }
+}
+
 function buildSieves(maxPoints) {
+    cancelZetaJob();
     MAX = maxPoints;
     
     // ---- Sieve of Eratosthenes ----
@@ -55,33 +71,114 @@ function buildSieves(maxPoints) {
     };
 }
 
-// Returns { raw, normalized, recomputed }.
+// Materialize the Float32 raw array and maxAbs from the cached Float64 partial sum S if needed.
+function ensureZetaRaw() {
+    if (_zetaCache.raw) return;
+    const S = _zetaCache.S;
+    const rawF32 = new Float32Array(MAX);
+    for (let i = 0; i < MAX; i++) rawF32[i] = -2.0 * S[i];
+    // Legacy normalization: scale from the Float32-rounded raw values, as before.
+    _zetaCache.raw = rawF32;
+    _zetaCache.maxAbs = maxAbsOf(rawF32);
+}
+
+// Emit zeta_done from the current _zetaCache (preserving the cache by copying raw before transfer).
+function emitZetaDone(reqId, amplitude, spacing, recomputed) {
+    ensureZetaRaw();
+    const raw = new Float32Array(_zetaCache.raw); // copy: the cache must survive the transfer
+    const normalized = new Float32Array(MAX);
+    scaleInto(normalized, raw, zetaNormScale(_zetaCache.maxAbs, spacing, amplitude));
+    // offsets = normalized (backward compatible); rawOffsets = unnormalized sum
+    self.postMessage(
+        { type: 'zeta_done', reqId, N: _zetaCache.N, offsets: normalized, rawOffsets: raw, recomputed },
+        [normalized.buffer, raw.buffer]
+    );
+}
+
+// Emit per-request work-relative progress (D4: (doneK - startK) / (targetN - startK) in 0..100).
+function emitZetaProgress(reqId, startK, doneK, targetN) {
+    const span = targetN - startK;
+    const pct = span > 0 ? Math.max(0, Math.min(100, ((doneK - startK) / span) * 100)) : 100;
+    self.postMessage({
+        type: 'progress',
+        stage: 'zeta',
+        reqId,
+        pct,
+        doneK,
+        startK,
+        targetN,
+    });
+}
+
+// Computes zeta offsets for N zeros:
 //   raw        = -sum_{k<=N} 2Re(x^rho_k/rho_k) at x = i+1 (unnormalized, Float32Array; fresh copy each call
 //                because it is transferred to the main thread)
 //   normalized = raw scaled so max|.| = spacing*8*amplitude (the legacy visual offsets)
 //   recomputed = whether the zero sum was (re)computed; false when only normalization was redone.
 // The zero sum is cached: amplitude/spacing changes only redo the normalization. N growing continues
-// from the cached partial sums; N shrinking recomputes.
-function computeZetaOffsets(N, amplitude, spacing) {
-    const normalized = new Float32Array(MAX);
-    N = Math.max(0, Math.min(Math.floor(N) || 0, _zetaDenom ? _zetaDenom.length : 0));
-    if (N === 0) { _zetaCache = null; return { raw: new Float32Array(MAX), normalized, recomputed: false }; }
+// from the cached partial sums (including partial sums committed before a cancellation); N shrinking recomputes.
+// Large increments run in chunks of ZETA_CHUNK_K via setTimeout(0) so zeta_cancel, newer zeta requests,
+// and explicit_* requests can preempt promptly.
+function startZetaComputation(reqId, rawN, amplitude, spacing) {
+    cancelZetaJob();
+    const N = Math.max(0, Math.min(Math.floor(rawN) || 0, _zetaDenom ? _zetaDenom.length : 0));
 
-    let recomputed = true;
-    if (_zetaCache && _zetaCache.N === N) {
-        recomputed = false;
-    } else {
-        const resume = _zetaCache && _zetaCache.N < N;
-        const S = resume ? _zetaCache.S : new Float64Array(MAX);
-        accumulateZeroSumPsi(S, _lnCache, _sqrtCache, ZETA_ZEROS, _zetaDenom, resume ? _zetaCache.N : 0, N);
-        const rawF32 = new Float32Array(MAX);
-        for (let i = 0; i < MAX; i++) rawF32[i] = -2.0 * S[i];
-        // Legacy normalization: scale from the Float32-rounded raw values, as before.
-        _zetaCache = { N, S, raw: rawF32, maxAbs: maxAbsOf(rawF32) };
+    if (N === 0) {
+        _zetaCache = null;
+        const normalized = new Float32Array(MAX);
+        const raw = new Float32Array(MAX);
+        self.postMessage(
+            { type: 'zeta_done', reqId, N: 0, offsets: normalized, rawOffsets: raw, recomputed: false },
+            [normalized.buffer, raw.buffer]
+        );
+        return;
     }
-    const raw = new Float32Array(_zetaCache.raw); // copy: the cache must survive the transfer
-    scaleInto(normalized, raw, zetaNormScale(_zetaCache.maxAbs, spacing, amplitude));
-    return { raw, normalized, recomputed };
+
+    if (_zetaCache && _zetaCache.N === N) {
+        emitZetaDone(reqId, amplitude, spacing, false);
+        return;
+    }
+
+    const resume = _zetaCache && _zetaCache.N < N;
+    const startK = resume ? _zetaCache.N : 0;
+    const S = resume ? _zetaCache.S : new Float64Array(MAX);
+
+    // Fast path: single chunk completes synchronously without emitting progress (D4).
+    if (N - startK <= ZETA_CHUNK_K) {
+        accumulateZeroSumPsi(S, _lnCache, _sqrtCache, ZETA_ZEROS, _zetaDenom, startK, N);
+        _zetaCache = { N, S, raw: null, maxAbs: 0 };
+        emitZetaDone(reqId, amplitude, spacing, true);
+        return;
+    }
+
+    // Chunked async path: preserve completed chunks in _zetaCache after each step.
+    const job = { reqId, startK, curK: startK, targetN: N, amplitude, spacing, S, timerId: null };
+    _zetaJob = job;
+
+    // Emit initial 0% progress immediately so the UI shows feedback without waiting for chunk 1.
+    emitZetaProgress(reqId, startK, startK, N);
+
+    const runChunk = () => {
+        if (_zetaJob !== job) return;
+        job.timerId = null;
+
+        const kNext = Math.min(job.curK + ZETA_CHUNK_K, job.targetN);
+        accumulateZeroSumPsi(job.S, _lnCache, _sqrtCache, ZETA_ZEROS, _zetaDenom, job.curK, kNext);
+        job.curK = kNext;
+
+        // Commit intermediate state immediately (raw: null prevents reusing stale Float32 buffers).
+        _zetaCache = { N: kNext, S: job.S, raw: null, maxAbs: 0 };
+
+        if (kNext < job.targetN) {
+            emitZetaProgress(job.reqId, job.startK, kNext, job.targetN);
+            job.timerId = setTimeout(runChunk, 0);
+        } else {
+            _zetaJob = null;
+            emitZetaDone(job.reqId, job.amplitude, job.spacing, true);
+        }
+    };
+
+    job.timerId = setTimeout(runChunk, 0);
 }
 
 self.onmessage = (e) => {
@@ -121,12 +218,9 @@ self.onmessage = (e) => {
             ? _explicitXs.xs : logSpacedSamples(2, xMax, msg.M);
         const recon = computeExplicitRecon(xs, msg.N, ZETA_ZEROS, formulaKind, _zetaDenom);
         self.postMessage({ type: 'explicit_done', kind: 'recon', reqId: msg.reqId, recon }, [recon.buffer]);
+    } else if (msg.type === 'zeta_cancel') {
+        cancelZetaJob();
     } else if (msg.type === 'zeta') {
-        const { raw, normalized, recomputed } = computeZetaOffsets(msg.N, msg.amplitude, msg.spacing);
-        // offsets = normalized (backward compatible); rawOffsets = unnormalized sum
-        self.postMessage(
-            { type: 'zeta_done', reqId: msg.reqId, offsets: normalized, rawOffsets: raw, recomputed },
-            [normalized.buffer, raw.buffer]
-        );
+        startZetaComputation(msg.reqId, msg.N, msg.amplitude, msg.spacing);
     }
 };

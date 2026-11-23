@@ -38,7 +38,7 @@ export function animate(now = 0) {
         state.lerpActive = true;
     }
 
-    if (state.lerpActive && state.geometry) {
+    if (state.lerpActive && state.geometry && (!state.points || state.points.visible)) {
         const p = state.geometry.attributes.position.array;
         const limit = state.activePointCount * 3;
         let maxDeltaSq = 0;

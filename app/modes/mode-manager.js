@@ -49,7 +49,7 @@ export function rebuildPositions() {
     applyPositionOverlays();
 }
 
-export function toggleMode(id) {
+export function toggleMode(id, enterOpts) {
     const mode = modes.get(id);
     if (!mode) return;
 
@@ -79,7 +79,7 @@ export function toggleMode(id) {
                 activeOwner.exit();
             }
             activeOwner = mode;
-            activeOwner.enter();
+            activeOwner.enter(enterOpts);
         }
     } else {
         // Overlay mode
@@ -91,7 +91,7 @@ export function toggleMode(id) {
                 return;
             }
             activeOverlays.add(mode);
-            mode.enter();
+            mode.enter(enterOpts);
         }
     }
 

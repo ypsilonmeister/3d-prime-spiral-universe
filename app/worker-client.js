@@ -71,8 +71,8 @@ export function setWorkerReady(val) {
 
 export function initWorker(onProgress) {
     return new Promise((resolve, reject) => {
-        // Path relative to index.html
-        _worker = new Worker('worker.js', { type: 'module' });
+        // Resolve worker relative to this module so it does not depend on document URL
+        _worker = new Worker(new URL('../worker.js', import.meta.url), { type: 'module' });
         _worker.onerror = (e) => handleWorkerError(e, reject);
         _worker.onmessage = (e) => {
             const m = e.data;

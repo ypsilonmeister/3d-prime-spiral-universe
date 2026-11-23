@@ -16,6 +16,9 @@ import {
 } from './shared/explicit-formula.js';
 
 const ZETA_CHUNK_K = 20;
+const ZETA_PARTIAL_INTERVAL_MS = 400; // D3: emit first chunk immediately, then every 350-450ms
+
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
 let MAX = 0;
 let _lnCache = null;
@@ -28,7 +31,7 @@ let _zetaDenom = null;
 //   maxAbs: max |raw[i]| (valid when raw !== null)
 // Valid for the current MAX and cached N only; amplitude/spacing never invalidate it.
 let _zetaCache = null;
-// Active chunked zeta job (at most one): { reqId, startK, curK, targetN, amplitude, spacing, S, timerId }.
+// Active chunked zeta job (at most one): { reqId, startK, curK, targetN, amplitude, spacing, S, timerId, lastPartialAt }.
 let _zetaJob = null;
 let _spf = null;       // smallest-prime-factor table kept for the explicit-formula mode
 let _psiTables = null; // buildPsiTables(MAX, _spf), built lazily
@@ -82,15 +85,30 @@ function ensureZetaRaw() {
     _zetaCache.maxAbs = maxAbsOf(rawF32);
 }
 
-// Emit zeta_done from the current _zetaCache (preserving the cache by copying raw before transfer).
-function emitZetaDone(reqId, amplitude, spacing, recomputed) {
+// Build fresh transferable (normalized, raw) Float32Array copies from _zetaCache without detaching the cache.
+function buildZetaTransferBuffers(amplitude, spacing) {
     ensureZetaRaw();
     const raw = new Float32Array(_zetaCache.raw); // copy: the cache must survive the transfer
     const normalized = new Float32Array(MAX);
     scaleInto(normalized, raw, zetaNormScale(_zetaCache.maxAbs, spacing, amplitude));
+    return { normalized, raw };
+}
+
+// Emit zeta_done from the current _zetaCache (preserving the cache by copying raw before transfer).
+function emitZetaDone(reqId, amplitude, spacing, recomputed) {
+    const { normalized, raw } = buildZetaTransferBuffers(amplitude, spacing);
     // offsets = normalized (backward compatible); rawOffsets = unnormalized sum
     self.postMessage(
         { type: 'zeta_done', reqId, N: _zetaCache.N, offsets: normalized, rawOffsets: raw, recomputed },
+        [normalized.buffer, raw.buffer]
+    );
+}
+
+// Emit intermediate zeta_partial snapshot with both offsets and rawOffsets (D3) so main-thread buffers stay consistent.
+function emitZetaPartial(reqId, doneK, targetN, amplitude, spacing) {
+    const { normalized, raw } = buildZetaTransferBuffers(amplitude, spacing);
+    self.postMessage(
+        { type: 'zeta_partial', reqId, doneK, targetN, offsets: normalized, rawOffsets: raw },
         [normalized.buffer, raw.buffer]
     );
 }
@@ -152,11 +170,12 @@ function startZetaComputation(reqId, rawN, amplitude, spacing) {
     }
 
     // Chunked async path: preserve completed chunks in _zetaCache after each step.
-    const job = { reqId, startK, curK: startK, targetN: N, amplitude, spacing, S, timerId: null };
+    const job = { reqId, startK, curK: startK, targetN: N, amplitude, spacing, S, timerId: null, lastPartialAt: null };
     _zetaJob = job;
 
     // Emit initial 0% progress immediately so the UI shows feedback without waiting for chunk 1.
     emitZetaProgress(reqId, startK, startK, N);
+    if (_zetaJob !== job) return;
 
     const runChunk = () => {
         if (_zetaJob !== job) return;
@@ -171,6 +190,13 @@ function startZetaComputation(reqId, rawN, amplitude, spacing) {
 
         if (kNext < job.targetN) {
             emitZetaProgress(job.reqId, job.startK, kNext, job.targetN);
+            if (_zetaJob !== job) return;
+            const now = nowMs();
+            if (job.lastPartialAt === null || (now - job.lastPartialAt) >= ZETA_PARTIAL_INTERVAL_MS) {
+                emitZetaPartial(job.reqId, kNext, job.targetN, job.amplitude, job.spacing);
+                job.lastPartialAt = nowMs();
+                if (_zetaJob !== job) return;
+            }
             job.timerId = setTimeout(runChunk, 0);
         } else {
             _zetaJob = null;

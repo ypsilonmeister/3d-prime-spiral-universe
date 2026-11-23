@@ -78,11 +78,21 @@ export function computeZetaOffsets(N) {
     }
     if (isWorkerReady()) {
         const requestedN = N;
-        requestZetaOffsets(N, state.zetaAmplitude, state.currentSpacing).then(applied => {
+        const canApplyOverlay = () => (
+            state.zetaModeActive
+            && !state.explicitModeActive
+            && state.zetaZeroCount === requestedN
+            && !state.padicModeActive
+            && !state.primeDimModeActive
+        );
+        requestZetaOffsets(N, state.zetaAmplitude, state.currentSpacing, {
+            onPartial: () => {
+                if (!canApplyOverlay()) return;
+                applyPositionOverlays();
+            },
+        }).then(applied => {
             if (!applied) return;
-            if (!state.zetaModeActive) return;
-            if (state.zetaZeroCount !== requestedN) return;
-            if (state.padicModeActive || state.primeDimModeActive) return;
+            if (!canApplyOverlay()) return;
             applyPositionOverlays();
         });
     } else {

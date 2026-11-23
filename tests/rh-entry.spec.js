@@ -143,6 +143,7 @@ test.describe('RH dedicated entry page (/rh/) and explicit launch path', () => {
       'explicit-measured',
       'explicit-primes',
       'explicit-ribbon',
+      'explicit-rungs',
       'explicit-shell',
     ]);
     expect(snapshot.glError).toBe(0);

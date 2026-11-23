@@ -45,7 +45,7 @@ test.describe('explicit formula mode', () => {
       return { pointsVisible: s.points.visible, names, glError: gl.getError(), M: s.explicitInfo.M };
     });
     expect(r.pointsVisible).toBe(false);
-    expect(r.names).toEqual(['explicit-axis', 'explicit-boundary-ring', 'explicit-measured', 'explicit-primes', 'explicit-ribbon', 'explicit-shell']);
+    expect(r.names).toEqual(['explicit-axis', 'explicit-boundary-ring', 'explicit-measured', 'explicit-primes', 'explicit-ribbon', 'explicit-rungs', 'explicit-shell']);
     expect(r.glError).toBe(0);
     expect(r.M).toBe(1600);
     await expect(page.locator('#explicit-controls')).toContainText('誤差上限（RH を仮定した場合）');
@@ -73,24 +73,43 @@ test.describe('explicit formula mode', () => {
     expect(rms[100]).toBeGreaterThan(rms[1000]);
   });
 
-  test('no shell vertex below x = 73.2; boundary ring sits at 73.2', async ({ page }) => {
+  test('no shell vertex below x = 73.2; outline shell has upper/lower boundaries + spaced rings and boundary ring at 73.2', async ({ page }) => {
     test.setTimeout(120_000);
     await boot(page);
     await enter(page);
     await expect.poll(async () => { const i = await info(page); return i && i.N != null; }, { timeout: 30_000 }).toBe(true);
     const r = await page.evaluate(() => {
       const s = window.__APP_STATE__;
-      const mesh = s.scene.getObjectByName('explicit-shell');
+      const shellObj = s.scene.getObjectByName('explicit-shell');
+      const ringObj = s.scene.getObjectByName('explicit-boundary-ring');
       const xs = s.explicitInfo.shellX;
       return {
-        minX: Math.min(...xs), rings: xs.length, seg: s.explicitInfo.shell.segments,
-        verts: mesh.geometry.attributes.position.count,
+        isLineSegments: shellObj.isLineSegments === true,
+        isMesh: shellObj.isMesh === true,
+        ringIsLineLoop: ringObj.isLineLoop === true,
+        ringVerts: ringObj.geometry.attributes.position.count,
+        style: s.explicitInfo.shell.style,
+        minX: Math.min(...xs),
+        samples: s.explicitInfo.shell.samples,
+        rings: s.explicitInfo.shell.rings,
+        seg: s.explicitInfo.shell.segments,
+        verts: shellObj.geometry.attributes.position.count,
+        colorHex: shellObj.material.color.getHex(),
         measuredBelow: s.explicitInfo.samples, // samples incl. x<73.2 exist for measured curve
       };
     });
+    expect(r.isLineSegments).toBe(true);
+    expect(r.isMesh).toBe(false);
+    expect(r.ringIsLineLoop).toBe(true);
+    expect(r.ringVerts).toBe(r.seg);
+    expect(r.style).toBe('outline');
+    expect(r.colorHex).toBe(0x8866ff);
     expect(r.minX).toBeGreaterThanOrEqual(73.2);
     expect(r.minX).toBe(73.2);
-    expect(r.verts).toBe(r.rings * r.seg); // every shell vertex belongs to a ring with x >= 73.2
+    expect(r.rings).toBeGreaterThan(0);
+    expect(r.rings).toBeLessThan(r.samples); // spaced rings, not a solid tube
+    // Upper/lower boundary segments + spaced ring segments, all built strictly from x >= 73.2
+    expect(r.verts).toBe(2 * (2 * (r.samples - 1) + r.rings * r.seg));
     expect(r.measuredBelow).toBe(1600);
   });
 
@@ -206,7 +225,7 @@ test.describe('explicit formula mode', () => {
       { timeout: 30_000 }).toBe(true);
     await expect(page.locator('#explicit-status')).toHaveText('(fallback mode: reduced samples)');
     const n = await page.evaluate(() => window.__APP_STATE__.scene.getObjectByName('explicit-group').children.length);
-    expect(n).toBe(6);
+    expect(n).toBe(7);
     await setN(page, 50); // still interactive afterwards
   });
   // ---- review #291 regressions -------------------------------------------
@@ -452,16 +471,18 @@ test.describe('explicit formula mode', () => {
     expect(viewA1.byName['explicit-shell'].visible).toBe(true);
     expect(viewA1.byName['explicit-boundary-ring'].visible).toBe(true);
     expect(viewA1.byName['explicit-measured'].visible).toBe(true);
+    expect(viewA1.byName['explicit-rungs'].visible).toBe(true);
     expect(viewA1.byName['explicit-ribbon'].visible).toBe(true);
     expect(viewA1.shellVisibleInfo).toBe(true);
 
-    // Switch to View B (residual only): shell, boundary ring, and measured curve hide automatically
+    // Switch to View B (residual only): shell, boundary ring, rungs, and measured curve hide automatically
     await page.locator('#explicit-view-b').click();
     await expect(page.locator('#explicit-view-b')).toHaveAttribute('aria-pressed', 'true');
     const viewB1 = await snapshot();
     expect(viewB1.byName['explicit-shell'].visible).toBe(false);
     expect(viewB1.byName['explicit-boundary-ring'].visible).toBe(false);
     expect(viewB1.byName['explicit-measured'].visible).toBe(false);
+    expect(viewB1.byName['explicit-rungs'].visible).toBe(false);
     expect(viewB1.byName['explicit-axis'].visible).toBe(true);
     expect(viewB1.byName['explicit-ribbon'].visible).toBe(true);
     expect(viewB1.shellVisibleInfo).toBe(false);
@@ -477,18 +498,20 @@ test.describe('explicit formula mode', () => {
     expect(viewB2.byName['explicit-shell'].visible).toBe(false);
     expect(viewB2.byName['explicit-boundary-ring'].visible).toBe(false);
     expect(viewB2.byName['explicit-measured'].visible).toBe(false);
+    expect(viewB2.byName['explicit-rungs'].visible).toBe(false);
     expect(viewB2.ribbonTail).not.toEqual(viewB1.ribbonTail);
     for (const name of Object.keys(viewA1.byName)) {
       expect(viewB2.byName[name].uuid).toBe(viewA1.byName[name].uuid);
     }
 
-    // Returning to View A restores shell, boundary ring, and measured curve from cache
+    // Returning to View A restores shell, boundary ring, rungs, and measured curve from cache
     await page.locator('#explicit-view-a').click();
     await expect(page.locator('#explicit-view-a')).toHaveAttribute('aria-pressed', 'true');
     const viewA2 = await snapshot();
     expect(viewA2.byName['explicit-shell'].visible).toBe(true);
     expect(viewA2.byName['explicit-boundary-ring'].visible).toBe(true);
     expect(viewA2.byName['explicit-measured'].visible).toBe(true);
+    expect(viewA2.byName['explicit-rungs'].visible).toBe(true);
     expect(viewA2.shellVisibleInfo).toBe(true);
     for (const name of Object.keys(viewA1.byName)) {
       expect(viewA2.byName[name].uuid).toBe(viewA1.byName[name].uuid);
@@ -1194,6 +1217,263 @@ test.describe('explicit formula mode', () => {
     expect(result.checked).toBe(12800 + 128);
     expect(result.valueMismatchCount, JSON.stringify(result.valueSample)).toBe(0);
     expect(result.mismatchCount, JSON.stringify(result.sample)).toBe(0);
+    expect(errors).toEqual([]);
+  });
+
+  // ---- Issue #26: outline shell, foreground curves, residual rungs --------
+
+  test('Issue #26: measured & reconstruction curves render in front of shell/axis; 3D cylinder rungs are visible at default view and shorten as N increases; View B matches master', async ({ page }) => {
+    test.setTimeout(180_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.view === 'a');
+
+    // 1. Verify draw order puts measured (cyan) & ribbon (orange) in front of axis/shell/ring/primes,
+    //    and rungs use a thin 3D InstancedMesh cylinder with distinct white-ish colour & medium opacity.
+    const orderInfo = await page.evaluate(() => {
+      const g = window.__APP_STATE__.scene.getObjectByName('explicit-group');
+      const byName = Object.fromEntries(g.children.map(c => [c.name, {
+        renderOrder: c.renderOrder,
+        transparent: c.material.transparent,
+        opacity: c.material.opacity,
+        depthWrite: c.material.depthWrite,
+        polygonOffset: c.material.polygonOffset,
+        polygonOffsetFactor: c.material.polygonOffsetFactor,
+        polygonOffsetUnits: c.material.polygonOffsetUnits,
+        isLineSegments: c.isLineSegments === true,
+        isMesh: c.isMesh === true,
+        isInstancedMesh: c.isInstancedMesh === true,
+        geomType: c.geometry ? c.geometry.type : null,
+        geomParams: c.geometry && c.geometry.parameters ? c.geometry.parameters : null,
+        color: c.material && c.material.color ? { r: c.material.color.r, g: c.material.color.g, b: c.material.color.b } : null,
+      }]));
+      return byName;
+    });
+
+    expect(orderInfo['explicit-shell'].isLineSegments).toBe(true);
+    expect(orderInfo['explicit-shell'].isMesh).toBe(false);
+    expect(orderInfo['explicit-rungs'].isInstancedMesh).toBe(true);
+    expect(orderInfo['explicit-rungs'].geomType).toBe('CylinderGeometry');
+    expect(orderInfo['explicit-rungs'].geomParams.radiusTop).toBeGreaterThan(0);
+    expect(orderInfo['explicit-rungs'].geomParams.radiusBottom).toBeGreaterThan(0);
+    expect(orderInfo['explicit-rungs'].color.r).toBeGreaterThan(0.85);
+    expect(orderInfo['explicit-rungs'].color.g).toBeGreaterThan(0.85);
+    expect(orderInfo['explicit-rungs'].color.b).toBeGreaterThan(0.85);
+    expect(orderInfo['explicit-rungs'].opacity).toBeGreaterThan(0.3);
+    expect(orderInfo['explicit-rungs'].opacity).toBeLessThan(0.9);
+    for (const bg of ['explicit-axis', 'explicit-shell', 'explicit-boundary-ring', 'explicit-primes']) {
+      expect(orderInfo[bg].transparent).toBe(true);
+      expect(orderInfo[bg].depthWrite).toBe(false);
+      expect(orderInfo['explicit-ribbon'].renderOrder).toBeGreaterThan(orderInfo[bg].renderOrder);
+      expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo[bg].renderOrder);
+    }
+    expect(orderInfo['explicit-rungs'].transparent).toBe(true);
+    expect(orderInfo['explicit-rungs'].depthWrite).toBe(false);
+    expect(orderInfo['explicit-ribbon'].transparent).toBe(true);
+    expect(orderInfo['explicit-measured'].transparent).toBe(true);
+    expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo['explicit-ribbon'].renderOrder);
+    expect(orderInfo['explicit-measured'].renderOrder).toBeGreaterThan(orderInfo['explicit-rungs'].renderOrder);
+
+    // Legend notes that residual rungs are magnified in View A
+    await expect(page.locator('#explicit-legend-rungs')).toBeVisible();
+    await expect(page.locator('#explicit-legend-rungs')).toContainText('横木は残差を拡大表示');
+
+    // 2. Measure rung length (3D + projected px at default camera) and default-view pixel diff across N = 10 -> 100 -> 1000
+    const measureRungs = () => page.evaluate(async () => {
+      const THREE = await import('three');
+      const s = window.__APP_STATE__;
+      const rungs = s.scene.getObjectByName('explicit-rungs');
+      const count = rungs.count;
+      const renderer = s.renderer;
+      const viewSize = new THREE.Vector2();
+      renderer.getSize(viewSize);
+      rungs.updateWorldMatrix(true, false);
+      s.camera.updateMatrixWorld(true);
+      s.camera.updateProjectionMatrix();
+
+      const mat4 = new THREE.Matrix4();
+      const worldMat = new THREE.Matrix4();
+      const pos = new THREE.Vector3();
+      const quat = new THREE.Quaternion();
+      const scale = new THREE.Vector3();
+      const halfAxis = new THREE.Vector3();
+      const p0 = new THREE.Vector3();
+      const p1 = new THREE.Vector3();
+      let sum = 0;
+      let max = 0;
+      let sumProjPx = 0;
+      let maxProjPx = 0;
+      for (let k = 0; k < count; k++) {
+        rungs.getMatrixAt(k, mat4);
+        worldMat.multiplyMatrices(rungs.matrixWorld, mat4);
+        worldMat.decompose(pos, quat, scale);
+        const len = scale.y;
+        sum += len;
+        if (len > max) max = len;
+
+        halfAxis.set(0, 0.5 * len, 0).applyQuaternion(quat);
+        p0.copy(pos).sub(halfAxis).project(s.camera);
+        p1.copy(pos).add(halfAxis).project(s.camera);
+        const dx = (p1.x - p0.x) * 0.5 * viewSize.x;
+        const dy = (p1.y - p0.y) * 0.5 * viewSize.y;
+        const projPx = Math.hypot(dx, dy);
+        sumProjPx += projPx;
+        if (projPx > maxProjPx) maxProjPx = projPx;
+      }
+
+      // Render-toggle pixel diff at fixed default camera (same methodology as review #17/#19)
+      const gl = renderer.getContext();
+      const w = gl.drawingBufferWidth;
+      const h = gl.drawingBufferHeight;
+      const readFrame = (vis) => {
+        rungs.visible = vis;
+        renderer.clear();
+        renderer.render(s.scene, s.camera);
+        const buf = new Uint8Array(w * h * 4);
+        gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+        return buf;
+      };
+      const prevVis = rungs.visible;
+      let diffPixels = 0;
+      let restoreDiff = 0;
+      if (prevVis) {
+        const on1 = readFrame(true);
+        const off = readFrame(false);
+        const on2 = readFrame(true);
+        for (let i = 0; i < on1.length; i += 4) {
+          if (on1[i] !== off[i] || on1[i + 1] !== off[i + 1] || on1[i + 2] !== off[i + 2]) diffPixels++;
+          if (on1[i] !== on2[i] || on1[i + 1] !== on2[i + 1] || on1[i + 2] !== on2[i + 2]) restoreDiff++;
+        }
+      }
+      rungs.visible = prevVis;
+      return {
+        visible: prevVis,
+        count,
+        geomUuid: rungs.geometry.uuid,
+        meanLen: sum / count,
+        maxLen: max,
+        meanProjPx: sumProjPx / count,
+        maxProjPx,
+        diffPixels,
+        restoreDiff,
+        glError: gl.getError(),
+      };
+    });
+
+    const rungStats = {};
+    for (const n of [10, 100, 1000]) {
+      await setN(page, n);
+      rungStats[n] = await measureRungs();
+      expect(rungStats[n].visible).toBe(true);
+      expect(rungStats[n].count).toBeGreaterThanOrEqual(50);
+      expect(rungStats[n].diffPixels, `default-view pixel diff at N=${n}`).toBeGreaterThan(0);
+      expect(rungStats[n].restoreDiff).toBe(0);
+      expect(rungStats[n].glError).toBe(0);
+    }
+    console.log('Residual rung stats (length, projected px & default-view diffPixels):', JSON.stringify(rungStats));
+    expect(rungStats[10].geomUuid).toBe(rungStats[100].geomUuid);
+    expect(rungStats[100].geomUuid).toBe(rungStats[1000].geomUuid);
+    // 3D display length: capped within shell bounds and monotonically decreasing
+    expect(rungStats[10].maxLen).toBeLessThanOrEqual(200);
+    expect(rungStats[10].meanLen).toBeGreaterThan(rungStats[100].meanLen);
+    expect(rungStats[100].meanLen).toBeGreaterThan(rungStats[1000].meanLen);
+    expect(rungStats[1000].meanLen).toBeGreaterThan(0);
+    // Projected length at default camera: clearly legible as lines at N=10 (several+ px),
+    // monotonically shortening across N=10 -> 100 -> 1000, down to short stubs at N=1000
+    expect(rungStats[10].maxProjPx).toBeGreaterThanOrEqual(5);
+    expect(rungStats[10].meanProjPx).toBeGreaterThan(rungStats[100].meanProjPx);
+    expect(rungStats[100].meanProjPx).toBeGreaterThan(rungStats[1000].meanProjPx);
+    expect(rungStats[1000].meanProjPx).toBeGreaterThan(0);
+    expect(rungStats[10].maxProjPx).toBeGreaterThan(rungStats[100].maxProjPx);
+    expect(rungStats[100].maxProjPx).toBeGreaterThan(rungStats[1000].maxProjPx);
+    expect(rungStats[1000].maxProjPx).toBeLessThan(2);
+    expect(rungStats[10].diffPixels).toBeGreaterThan(rungStats[1000].diffPixels);
+
+    // 3. Sweep playback also updates rungs in-place (N=0 -> 1000) and shortens them by completion
+    await setN(page, 0);
+    const atN0 = await measureRungs();
+    expect(atN0.meanLen).toBeGreaterThan(rungStats[1000].meanLen);
+    expect(atN0.diffPixels).toBeGreaterThan(0);
+
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
+    await page.locator('#explicit-sweep-btn').click();
+    await expect.poll(
+      async () => page.evaluate(() => ({
+        sweepState: window.__APP_STATE__.explicitSweepState,
+        N: window.__APP_STATE__.explicitInfo && window.__APP_STATE__.explicitInfo.N,
+      })),
+      { timeout: 30_000 },
+    ).toEqual({ sweepState: 'done', N: 1000 });
+
+    const afterSweep = await measureRungs();
+    expect(afterSweep.geomUuid).toBe(rungStats[1000].geomUuid);
+    expect(afterSweep.meanLen).toBeLessThan(atN0.meanLen);
+    expect(Math.abs(afterSweep.meanLen - rungStats[1000].meanLen)).toBeLessThan(1e-6);
+
+    // 4. View B hides rungs and legend entry, and restores ribbon/axis/primes render settings to master
+    await page.locator('#explicit-view-b').click();
+    const viewB = await page.evaluate(() => {
+      const g = window.__APP_STATE__.scene.getObjectByName('explicit-group');
+      const ribbon = g.getObjectByName('explicit-ribbon');
+      const axis = g.getObjectByName('explicit-axis');
+      const primes = g.getObjectByName('explicit-primes');
+      const rungs = g.getObjectByName('explicit-rungs');
+      const legRungs = document.getElementById('explicit-legend-rungs');
+      return {
+        rungsVisible: rungs.visible,
+        legendRungsHidden: legRungs.hidden,
+        ribbon: {
+          transparent: ribbon.material.transparent,
+          polygonOffset: ribbon.material.polygonOffset,
+          polygonOffsetFactor: ribbon.material.polygonOffsetFactor,
+          polygonOffsetUnits: ribbon.material.polygonOffsetUnits,
+          renderOrder: ribbon.renderOrder,
+        },
+        axis: {
+          depthWrite: axis.material.depthWrite,
+          renderOrder: axis.renderOrder,
+        },
+        primes: {
+          renderOrder: primes.renderOrder,
+        },
+      };
+    });
+    expect(viewB.rungsVisible).toBe(false);
+    expect(viewB.legendRungsHidden).toBe(true);
+    expect(viewB.ribbon).toEqual({
+      transparent: false,
+      polygonOffset: false,
+      polygonOffsetFactor: 0,
+      polygonOffsetUnits: 0,
+      renderOrder: 0,
+    });
+    expect(viewB.axis).toEqual({ depthWrite: true, renderOrder: 0 });
+    expect(viewB.primes).toEqual({ renderOrder: 0 });
+
+    // Returning to View A restores legend and View A render settings
+    await page.locator('#explicit-view-a').click();
+    const backToA = await page.evaluate(() => {
+      const g = window.__APP_STATE__.scene.getObjectByName('explicit-group');
+      const ribbon = g.getObjectByName('explicit-ribbon');
+      const axis = g.getObjectByName('explicit-axis');
+      const rungs = g.getObjectByName('explicit-rungs');
+      return {
+        rungsVisible: rungs.visible,
+        legendRungsHidden: document.getElementById('explicit-legend-rungs').hidden,
+        ribbonTransparent: ribbon.material.transparent,
+        ribbonPolygonOffset: ribbon.material.polygonOffset,
+        ribbonRenderOrder: ribbon.renderOrder,
+        axisDepthWrite: axis.material.depthWrite,
+      };
+    });
+    expect(backToA).toEqual({
+      rungsVisible: true,
+      legendRungsHidden: false,
+      ribbonTransparent: true,
+      ribbonPolygonOffset: true,
+      ribbonRenderOrder: 10,
+      axisDepthWrite: false,
+    });
     expect(errors).toEqual([]);
   });
 });

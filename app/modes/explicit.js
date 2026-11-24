@@ -18,6 +18,7 @@ import {
 } from '../../shared/explicit-formula.js';
 import { isWorkerReady, requestExplicit, cancelExplicitRequests, cancelExplicitReconRequests, cancelPendingZetaRequests, onWorkerFailure } from '../worker-client.js';
 import { DEFAULT_PAGE_TITLE, RH_PAGE_TITLE, buildCleanExitUrl } from '../launch-options.js';
+import { createParticleShaderMaterial } from '../render/particles.js';
 import { computeZetaOffsets } from './zeta.js';
 import { stopZetaAnimation, runZetaAnimation, zetaAnimTarget, zetaAnimN } from './zeta-anim.js';
 import {
@@ -50,8 +51,16 @@ const RESIDUAL_FULL = 0.25 * AMP; // residual (display units) mapped to the "hot
 const DEFAULT_N = 100;
 const COL_BASE = new THREE.Color(0xffaa33), COL_HOT = new THREE.Color(0xff2d55);
 const PRIME_MARKER_COLOR = 0xf4f7ff; // crisp off-white, distinct from cyan / warm / magenta / violet
-const PRIME_MARKER_SIZE = 16;
-const PRIME_MARKER_OPACITY = 0.85;
+const PRIME_MARKER_SIZE = 28;
+const PRIME_MARKER_DOT_SIZE = 26;    // thinned dense-region markers stay visible as dots (< minPrimeSize)
+const PRIME_LABEL_MIN_SIZE = 27.0;   // separates labeled primes (28) from dot-only primes (26)
+const PRIME_LABEL_FAR_SCALE = 2.0;   // labelFar = min(uViewHeight * 2.0, PRIME_LABEL_FAR_MAX)
+const PRIME_LABEL_NEAR_SCALE = 0.7;  // labelNear = min(uViewHeight * 0.7, PRIME_LABEL_NEAR_MAX)
+const PRIME_LABEL_FAR_MAX = 2400.0;  // caps far fade on tall viewports (e.g. 1920x2880) well below min default distance (~4369)
+const PRIME_LABEL_NEAR_MAX = 840.0;  // preserves 0.7/2.0 ratio when labelFar is capped
+const PRIME_LABEL_MIN_SPACING = 52.0; // world-unit spacing (> sprite world width ~48.5) to prevent adjacent label overlap
+const PRIME_LABEL_MAX_POINT_SIZE = 160.0; // keeps close-up digits crisp even near the near clip plane (dist ~1.2)
+const PRIME_DOT_MAX_POINT_SIZE = 8.0;     // keeps dense non-labeled dots compact so they never wash out close-up labels
 
 let group = null;
 let token = 0;            // bumps on every full rebuild / exit; stale async results are dropped
@@ -390,33 +399,117 @@ function renderExplicitPanel() {
 
 // ---- geometry ------------------------------------------------------------
 
+// Deterministic priority-ordered spatial thinning for dense prime marker labels.
+// Keeps 100% of labels in sparse regions (where spacing >= minSpacing) and selects
+// non-overlapping labels in dense regions, prioritizing axis endpoints and round prime-count milestones.
+function selectLabeledPrimes(pos, count, minSpacing) {
+    const labeled = new Uint8Array(count);
+    if (count === 0) return labeled;
+
+    const arcLen = new Float64Array(count);
+    for (let i = 1; i < count; i++) {
+        const dx = pos[i * 3] - pos[(i - 1) * 3];
+        const dy = pos[i * 3 + 1] - pos[(i - 1) * 3 + 1];
+        const dz = pos[i * 3 + 2] - pos[(i - 1) * 3 + 2];
+        arcLen[i] = arcLen[i - 1] + Math.hypot(dx, dy, dz);
+    }
+
+    const tiers = [[], [], [], [], [], []];
+    for (let i = 0; i < count; i++) {
+        const rank = i + 1;
+        if (rank === 1 || rank === count) tiers[0].push(i);
+        else if (rank % 10000 === 0) tiers[1].push(i);
+        else if (rank % 1000 === 0) tiers[2].push(i);
+        else if (rank % 100 === 0) tiers[3].push(i);
+        else if (rank % 10 === 0) tiers[4].push(i);
+        else tiers[5].push(i);
+    }
+
+    const minSpacingSq = minSpacing * minSpacing;
+    const buckets = new Map();
+    for (const tier of tiers) {
+        for (const i of tier) {
+            const b = Math.floor(arcLen[i] / minSpacing);
+            const ix = pos[i * 3], iy = pos[i * 3 + 1], iz = pos[i * 3 + 2];
+            let conflict = false;
+            for (let nb = b - 1; nb <= b + 1 && !conflict; nb++) {
+                const list = buckets.get(nb);
+                if (!list) continue;
+                for (let k = 0; k < list.length; k++) {
+                    const j = list[k];
+                    const dx = ix - pos[j * 3];
+                    const dy = iy - pos[j * 3 + 1];
+                    const dz = iz - pos[j * 3 + 2];
+                    if (dx * dx + dy * dy + dz * dz < minSpacingSq) {
+                        conflict = true;
+                        break;
+                    }
+                }
+            }
+            if (!conflict) {
+                labeled[i] = 1;
+                let list = buckets.get(b);
+                if (!list) {
+                    list = [];
+                    buckets.set(b, list);
+                }
+                list.push(i);
+            }
+        }
+    }
+    return labeled;
+}
+
 // Prime markers on the reference axis C(u) for all primes p in [2, xMax],
 // read directly from the app's existing prime table (state.isPrimeArray — no sieve duplication).
+// Reuses the main spiral's digit-atlas + distance fade-in shader (createParticleShaderMaterial).
 function buildPrimeMarkers(xMax, uOf) {
     const isPrime = state.isPrimeArray;
     const limit = isPrime ? Math.min(xMax, isPrime.length - 1) : 0;
     let count = 0;
     for (let p = 2; p <= limit; p++) if (isPrime[p]) count++;
     const pos = new Float32Array(count * 3);
+    const nums = new Float32Array(count);
+    const cols = new Float32Array(count * 3);
+    const sizes = new Float32Array(count);
+    const markerColor = new THREE.Color(PRIME_MARKER_COLOR);
     let k = 0;
+    let idx = 0;
     for (let p = 2; p <= limit; p++) {
         if (!isPrime[p]) continue;
         const u = uOf(p);
         const th = 2 * Math.PI * TURNS * u, r = R0 + (R1 - R0) * u, h = -H + 2 * H * u;
-        pos[k++] = r * Math.cos(th);
-        pos[k++] = h;
-        pos[k++] = r * Math.sin(th);
+        pos[k] = r * Math.cos(th);
+        pos[k + 1] = h;
+        pos[k + 2] = r * Math.sin(th);
+        cols[k] = markerColor.r;
+        cols[k + 1] = markerColor.g;
+        cols[k + 2] = markerColor.b;
+        k += 3;
+        nums[idx] = p;
+        idx++;
+    }
+    const labeled = selectLabeledPrimes(pos, count, PRIME_LABEL_MIN_SPACING);
+    for (let i = 0; i < count; i++) {
+        sizes[i] = labeled[i] ? PRIME_MARKER_SIZE : PRIME_MARKER_DOT_SIZE;
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    const m = new THREE.PointsMaterial({
-        color: PRIME_MARKER_COLOR,
-        size: PRIME_MARKER_SIZE,
-        sizeAttenuation: true,
-        transparent: true,
-        opacity: PRIME_MARKER_OPACITY,
-        depthWrite: false,
+    g.setAttribute('number', new THREE.BufferAttribute(nums, 1));
+    g.setAttribute('customColor', new THREE.BufferAttribute(cols, 3));
+    g.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    const m = createParticleShaderMaterial({
+        labelFarScale: PRIME_LABEL_FAR_SCALE,
+        labelNearScale: PRIME_LABEL_NEAR_SCALE,
+        labelFarMax: PRIME_LABEL_FAR_MAX,
+        labelNearMax: PRIME_LABEL_NEAR_MAX,
+        maxPointSize: PRIME_LABEL_MAX_POINT_SIZE,
+        maxNonLabelPointSize: PRIME_DOT_MAX_POINT_SIZE,
+        minPrimeSize: PRIME_LABEL_MIN_SIZE,
+        blending: THREE.NormalBlending,
+        showLabels: state.showLabels,
     });
+    m.color = markerColor;
     const pts = new THREE.Points(g, m);
     pts.name = 'explicit-primes';
     pts.renderOrder = RENDER_ORDER_PRIMES;
@@ -948,5 +1041,19 @@ export const explicitMode = {
             publish({ primesVisible: isPrimesVisible() });
         }
         renderExplicitPanel();
+    },
+    syncShowLabels() {
+        if (!group) return;
+        const primes = group.getObjectByName('explicit-primes');
+        if (primes && primes.material && primes.material.uniforms && primes.material.uniforms.uShowLabels) {
+            primes.material.uniforms.uShowLabels.value = state.showLabels ? 1.0 : 0.0;
+        }
+    },
+    syncViewHeight(height) {
+        if (!group) return;
+        const primes = group.getObjectByName('explicit-primes');
+        if (primes && primes.material && primes.material.uniforms && primes.material.uniforms.uViewHeight) {
+            primes.material.uniforms.uViewHeight.value = height;
+        }
     },
 };

@@ -18,6 +18,7 @@ import {
 import { bindUIEvents, toggleType } from './ui/bindings.js';
 
 import { initModeManager, setUIDisabledStateUpdateCallback, rebuildPositions, toggleMode } from './modes/mode-manager.js';
+import { explicitMode } from './modes/explicit.js';
 import { sieveTick, setSieveCallbacks } from './modes/sieve-anim.js';
 import { parseLaunchOptions } from './launch-options.js';
 
@@ -41,6 +42,7 @@ function onWindowResize() {
     if (state.points && state.points.material) {
         state.points.material.uniforms.uViewHeight.value = H;
     }
+    explicitMode.syncViewHeight(H);
     if (state.stereoMode !== 'off' && state.cameraL && state.cameraR) {
         state.cameraL.aspect = (W / 2) / H;
         state.cameraR.aspect = (W / 2) / H;

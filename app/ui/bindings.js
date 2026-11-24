@@ -107,6 +107,7 @@ export function bindUIEvents(enterVRCallback) {
             if (state.points && state.points.material) {
                 state.points.material.uniforms.uShowLabels.value = state.showLabels ? 1.0 : 0.0;
             }
+            explicitMode.syncShowLabels();
             updateUI();
         });
     }

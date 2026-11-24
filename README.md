@@ -15,14 +15,16 @@ An interactive 3D WebGL visualization exploring the distribution of prime number
 ### Zeta Wave Mode
 Riemann Zeta zeros superposed as standing waves along the Z-axis (`Amplitude: 5.0`, `Linear` sheet). / リーマンゼータ関数の非自明零点をZ軸方向の定在波として重ね合わせた表示。
 
-| Standing Wave (`N = 2`) | Zero-Sum Sweep (`N = 0 → 60`) |
-| :---: | :---: |
-| ![Zeta Wave Mode](docs/images/zeta-wave.webp) | ![Zeta Wave Animation](docs/images/zeta-wave.gif) |
+![Zeta Wave Mode (`N = 2`)](docs/images/zeta-wave.webp)
 
 ### Explicit Formula Mode
 Measured $\psi_1(x) - x^2/2$ (cyan), reconstruction from the first $N=100$ zeta zeros (amber ribbon), prime markers, and the RH-assumed Schoenfeld error shell $\pm B_1(x)$ ($x \ge 73.2$, violet) with live numeric HUD. / 実測のゆらぎ $\psi_1(x) - x^2/2$（シアン）、先頭 $N=100$ 個の零点による再構成（オレンジ帯）、素数マーカー、RH仮定下の誤差上限殻 $\pm B_1(x)$（紫）と数値HUD。
 
 ![Explicit Formula Mode](docs/images/explicit-formula.webp)
+
+![Explicit Formula Mode — N sweep (N = 10 → 1000)](docs/images/explicit-formula-sweep.gif)
+
+*N sweep, `N = 10 → 1000` (25 frames): the reconstruction from the first $N$ zeta zeros, with the large N read-out. The $\pm B_1(x)$ shell is an error bound visualized under the RH assumption (not a proven bound). / Nスイープ（N = 10 → 1000）。RHを仮定した誤差上限の可視化であり、証明済みの上限ではありません。*
 
 ## Features | 主な機能
 

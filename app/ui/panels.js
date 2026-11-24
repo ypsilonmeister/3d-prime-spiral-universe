@@ -27,7 +27,10 @@ export function initElements() {
         'rh-guide-panel', 'rh-guide-open-btn', 'rh-guide-card', 'rh-guide-collapse-btn',
         'rh-guide-sweep-btn', 'rh-guide-n-val', 'rh-exit-btn',
         'group-padic-toggle', 'group-primedim-toggle',
-        'group-ntl-toggle', 'group-sieve-toggle'
+        'group-ntl-toggle', 'group-sieve-toggle',
+        'nav-warped', 'nav-gaussian', 'nav-music',
+        'center-btn', 'hide-ui-btn', 'primedim-random-btn',
+        'sieve-reset-btn', 'sieve-step-btn'
     ];
     for (const id of ids) {
         elements[id] = document.getElementById(id);

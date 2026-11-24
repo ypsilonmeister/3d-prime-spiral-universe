@@ -229,6 +229,8 @@ export function bindUIEvents(enterVRCallback) {
             getElement('zeta-n-val').innerText = state.zetaZeroCount;
             const guideN = getElement('rh-guide-n-val');
             if (guideN) guideN.textContent = String(state.zetaZeroCount);
+            const bigN = getElement('explicit-n-display-val');
+            if (bigN) bigN.textContent = String(state.zetaZeroCount);
             // Invalidate any in-flight Zeta request immediately on N input so stale partials/progress
             // cannot mutate state or UI during the window before rafThrottle fires.
             if (changed && state.zetaModeActive && !state.explicitModeActive) {

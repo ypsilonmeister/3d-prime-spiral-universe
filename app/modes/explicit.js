@@ -24,6 +24,7 @@ import { stopZetaAnimation, runZetaAnimation, zetaAnimTarget, zetaAnimN } from '
 import {
     setExplicitSweepApplyCallback,
     setExplicitSweepStopCallback,
+    setExplicitSweepPhaseCallback,
     armExplicitSweep,
     beginArmedExplicitSweep,
     stopExplicitSweep,
@@ -876,6 +877,28 @@ async function applySweepStepN(n) {
 setExplicitSweepApplyCallback(applySweepStepN);
 setExplicitSweepStopCallback(invalidateRecon);
 
+// Dedicated entry only: while a sweep plays (auto-sweep or replay) show the residual view (B), where N
+// visibly changes the picture, and return to View A when it completes. Pause / stop / exit / a manual
+// view change count as interruptions: the view stays where it is (exit resets it, see exit()).
+let sweepForcedView = false;
+setExplicitSweepPhaseCallback((phase) => {
+    if (phase === 'start') {
+        sweepForcedView = false;
+        if (launchedFromUrl) {
+            // Whatever view the (re)play starts in (e.g. View B left behind by an interrupted sweep),
+            // completion returns to View A.
+            sweepForcedView = true;
+            if (currentView() === 'a') explicitMode.setView('b', { auto: true });
+        }
+    } else if (phase === 'complete') {
+        const back = sweepForcedView && currentView() === 'b';
+        sweepForcedView = false;
+        if (back) explicitMode.setView('a', { auto: true });
+    } else {
+        sweepForcedView = false;
+    }
+});
+
 function syncNControl() {
     if (typeof document === 'undefined') return;
     const slider = document.getElementById('zeta-n-slider');
@@ -886,6 +909,14 @@ function syncNControl() {
     if (val) val.innerText = state.zetaZeroCount;
     if (note) note.textContent = '';
     if (guideN) guideN.textContent = String(state.zetaZeroCount);
+    syncBigN();
+}
+
+// Large N read-out near the curve (follows sweep steps, slider input and restores).
+export function syncBigN() {
+    if (typeof document === 'undefined') return;
+    const big = document.getElementById('explicit-n-display-val');
+    if (big) big.textContent = String(state.zetaZeroCount);
 }
 
 // Zeta Wave is off: just put the shared slider/label back to the restored N.
@@ -961,7 +992,9 @@ export const explicitMode = {
     },
     // opts.willRebuild: the caller rebuilds the lattice (and the Zeta Wave) right after, so don't recompute here.
     exit(opts = {}) {
+        const resetView = sweepForcedView && currentView() === 'b';
         stopExplicitSweep();
+        if (resetView) state.explicitView = 'a'; // don't leak the sweep's temporary View B into the next session
         state.explicitModeActive = false;
         state.rhGuideVisible = false;
         state.rhGuideCollapsed = false;
@@ -1016,8 +1049,9 @@ export const explicitMode = {
             fullRebuild();
         }
     },
-    setView(view) {
+    setView(view, opts = {}) {
         const next = view === 'b' ? 'b' : 'a';
+        if (!(opts && opts.auto)) sweepForcedView = false; // a manual choice is final: never auto-revert it
         if (state.explicitView === next) return;
         state.explicitView = next;
         if (state.explicitModeActive) {

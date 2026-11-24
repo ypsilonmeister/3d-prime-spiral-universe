@@ -25,7 +25,7 @@ export function initElements() {
         'explicit-kind-psi1', 'explicit-kind-psi',
         'explicit-view-a', 'explicit-view-b', 'sw-explicit-primes',
         'rh-guide-panel', 'rh-guide-open-btn', 'rh-guide-card', 'rh-guide-collapse-btn',
-        'rh-guide-sweep-btn', 'rh-guide-n-val', 'rh-exit-btn',
+        'rh-guide-sweep-btn', 'rh-guide-n-val', 'rh-exit-btn', 'explicit-n-display', 'explicit-n-display-val',
         'group-padic-toggle', 'group-primedim-toggle',
         'group-ntl-toggle', 'group-sieve-toggle',
         'nav-warped', 'nav-gaussian', 'nav-music',
@@ -221,6 +221,12 @@ export function updateUI() {
     if (elements['sw-explicit']) elements['sw-explicit'].classList.toggle('on', state.explicitModeActive);
     const expCtl = document.getElementById('explicit-controls');
     if (expCtl) expCtl.style.display = state.explicitModeActive ? '' : 'none';
+
+    const bigN = elements['explicit-n-display'];
+    if (bigN) {
+        bigN.hidden = !state.explicitModeActive;
+        bigN.classList.toggle('hidden', !state.uiVisible);
+    }
 
     const rhPanel = elements['rh-guide-panel'];
     if (rhPanel) {

@@ -565,6 +565,85 @@ test.describe('Explicit Formula Mode N-sweep animation (PR 2)', () => {
     expect(errors).toEqual([]);
   });
 
+  test('dedicated entry sweep plays in View B with a large N read-out, returns to View A on completion, and replay does the same', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = [];
+    page.on('pageerror', err => errors.push(err.message));
+    await page.goto('/?mode=explicit', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+
+    const bigN = page.locator('#explicit-n-display-val');
+    await expect(page.locator('#explicit-n-display')).toBeVisible();
+    expect(await page.evaluate(() => ({ v: window.__APP_STATE__.explicitView, s: window.__APP_STATE__.explicitSweepState })))
+      .toEqual({ v: 'b', s: 'running' });
+    await expect(page.locator('#explicit-view-b')).toHaveAttribute('aria-pressed', 'true');
+    // Legible: at least 40px and tracks N while sweeping
+    const fontPx = await bigN.evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+    expect(fontPx).toBeGreaterThanOrEqual(40);
+    await expect.poll(async () => Number(await bigN.textContent()), { timeout: 10_000 }).toBeGreaterThan(0);
+
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitSweepState),
+      { timeout: 30_000 },
+    ).toBe('done');
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('a');
+    await expect(page.locator('#explicit-view-a')).toHaveAttribute('aria-pressed', 'true');
+    await expect(bigN).toHaveText('1000');
+
+    // Replay: View B again, back to A at the end
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 1; });
+    await page.locator('#explicit-sweep-btn').click();
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('b');
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitSweepState),
+      { timeout: 30_000 },
+    ).toBe('done');
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('a');
+    expect(errors).toEqual([]);
+  });
+
+  test('interrupting the sweep keeps View B, and the large N follows manual slider changes', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?mode=explicit', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitSweeping),
+      { timeout: 10_000 },
+    ).toBe(true);
+    await page.locator('#zeta-n-slider').evaluate((el) => {
+      el.value = '42';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await expect(page.locator('#explicit-n-display-val')).toHaveText('42');
+    await waitForExplicitSettled(page);
+    await page.waitForTimeout(500);
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('b');
+    await expect(page.locator('#explicit-n-display-val')).toHaveText('42');
+    // explicit View A choice afterwards is respected
+    await page.locator('#explicit-view-a').click();
+    await page.locator('#explicit-sweep-btn').click(); // replay -> View B again
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('b');
+  });
+
+  test('static start (?sweep=0) and manual Explicit toggle stay in View A and show the large N', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?mode=explicit&sweep=0', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+    await waitForExplicitSettled(page);
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('a');
+    await expect(page.locator('#explicit-n-display-val')).toHaveText('100');
+    // Manual sweep via the button on a dedicated entry is a replay: View B, then back to A
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
+    await page.locator('#explicit-sweep-btn').click();
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitSweepState),
+      { timeout: 30_000 },
+    ).toBe('done');
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('a');
+  });
+
   test('View B keeps sweep running, pause/resume works, and Kind switch stops sweep', async ({ page }) => {
     test.setTimeout(120_000);
     await page.goto('/?mode=explicit', { waitUntil: 'domcontentloaded' });

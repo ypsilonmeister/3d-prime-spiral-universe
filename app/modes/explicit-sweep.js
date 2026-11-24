@@ -67,6 +67,7 @@ const BUTTON_LABELS = {
 
 let applyStepCallback = null;
 let stopCallback = null;
+let phaseCallback = null; // ('start' | 'complete' | 'abort') -> void; lets the explicit mode drive the view
 let sweepToken = 0;
 let timerId = null;
 
@@ -109,15 +110,25 @@ export function setExplicitSweepStopCallback(fn) {
     stopCallback = typeof fn === 'function' ? fn : null;
 }
 
+export function setExplicitSweepPhaseCallback(fn) {
+    phaseCallback = typeof fn === 'function' ? fn : null;
+}
+
+function notifyPhase(phase) {
+    if (phaseCallback) phaseCallback(phase);
+}
+
 function setSweepState(nextState) {
     state.explicitSweepState = nextState;
     state.explicitSweeping = nextState === 'running';
     syncExplicitSweepButton();
+    if (nextState === 'done') notifyPhase('complete');
 }
 
 export function stopExplicitSweep() {
     sweepToken++;
     clearSweepTimer();
+    notifyPhase('abort');
     setSweepState('idle');
     if (stopCallback) stopCallback();
 }
@@ -126,6 +137,7 @@ export function pauseExplicitSweep() {
     if (state.explicitSweepState !== 'running') return;
     sweepToken++;
     clearSweepTimer();
+    notifyPhase('abort');
     setSweepState('paused');
 }
 
@@ -177,6 +189,7 @@ async function runStep(stepIndex, myToken) {
 export function armExplicitSweep() {
     const myToken = ++sweepToken;
     clearSweepTimer();
+    notifyPhase('start');
     setSweepState('running');
     return myToken;
 }
@@ -195,6 +208,7 @@ export function startExplicitSweep() {
     if (!state.explicitModeActive) return;
     const myToken = ++sweepToken;
     clearSweepTimer();
+    notifyPhase('start');
     setSweepState('running');
     runStep(0, myToken);
 }

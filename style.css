@@ -545,6 +545,44 @@ button.active {
     margin-top: 4px;
 }
 
+/* Large N read-out over the curve (Explicit Mode); decorative duplicate of the N slider value. */
+.explicit-n-display {
+    position: fixed;
+    top: 14px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 4px 18px 6px;
+    border-radius: 10px;
+    background: rgba(1, 1, 2, 0.55);
+    border: 1px solid rgba(255, 170, 51, 0.35);
+    color: #ffd89b;
+    pointer-events: none;
+    font-variant-numeric: tabular-nums;
+    text-shadow: 0 0 14px rgba(255, 170, 51, 0.45);
+}
+
+.explicit-n-display[hidden],
+.explicit-n-display.hidden {
+    display: none;
+}
+
+.explicit-n-display-label {
+    font-size: clamp(1rem, 2.4vw, 1.5rem);
+    opacity: 0.8;
+}
+
+.explicit-n-display-val {
+    font-size: clamp(2.6rem, 7vw, 4.5rem);
+    font-weight: bold;
+    line-height: 1;
+    min-width: 4ch;
+    text-align: right;
+}
+
 .explicit-hud {
     margin-top: 8px;
     padding-top: 6px;

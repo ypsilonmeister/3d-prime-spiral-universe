@@ -627,6 +627,64 @@ test.describe('Explicit Formula Mode N-sweep animation (PR 2)', () => {
     expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('b');
   });
 
+  test('replay started from the View B left by an interrupted sweep still returns to View A', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?mode=explicit', { waitUntil: 'domcontentloaded' });
+    await waitForReady(page);
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitSweeping),
+      { timeout: 10_000 },
+    ).toBe(true);
+    // Interrupt with the slider: the view stays in B
+    await page.locator('#zeta-n-slider').evaluate((el) => {
+      el.value = '42';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await waitForExplicitSettled(page);
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitSweeping)).toBe(false);
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('b');
+    // Replay straight away (no manual View A choice): starts in B, must complete back in A
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 1; });
+    await page.locator('#explicit-sweep-btn').click();
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('b');
+    await page.evaluate(() => { window.__APP_STATE__.explicitSweepIntervalScale = 0.01; });
+    await expect.poll(
+      async () => page.evaluate(() => window.__APP_STATE__.explicitSweepState),
+      { timeout: 30_000 },
+    ).toBe('done');
+    expect(await page.evaluate(() => window.__APP_STATE__.explicitView)).toBe('a');
+    await expect(page.locator('#explicit-n-display-val')).toHaveText('1000');
+  });
+
+  for (const [w, h] of [[700, 768], [667, 375], [390, 844], [1280, 720]]) {
+    test(`large N read-out is fully visible with the guide expanded at ${w}x${h}`, async ({ page }) => {
+      test.setTimeout(120_000);
+      await page.setViewportSize({ width: w, height: h });
+      await page.goto('/?mode=explicit', { waitUntil: 'domcontentloaded' });
+      await waitForReady(page);
+      await expect(page.locator('#explicit-n-display')).toBeVisible();
+      // worst case: widest value
+      await page.evaluate(() => { document.getElementById('explicit-n-display-val').textContent = '1000'; });
+      const r = await page.evaluate(() => {
+        const v = document.getElementById('explicit-n-display-val').getBoundingClientRect();
+        const g = document.getElementById('rh-guide-panel').getBoundingClientRect();
+        const pts = [[0.05, 0.5], [0.5, 0.5], [0.95, 0.5], [0.5, 0.1], [0.5, 0.9]];
+        const covered = pts.some(([fx, fy]) => {
+          const el = document.elementFromPoint(v.x + v.width * fx, v.y + v.height * fy);
+          return el && el.closest('#rh-guide-panel');
+        });
+        const overlapsGuide = v.right > g.x && v.x < g.right && v.bottom > g.y && v.y < g.bottom;
+        return { left: v.x, right: v.right, top: v.y, bottom: v.bottom, covered, overlapsGuide,
+          vw: window.innerWidth, vh: window.innerHeight, guideCollapsed: document.getElementById('rh-guide-panel').classList.contains('collapsed') };
+      });
+      expect(r.left).toBeGreaterThanOrEqual(0);
+      expect(r.right).toBeLessThanOrEqual(r.vw);
+      expect(r.bottom).toBeLessThanOrEqual(r.vh);
+      expect(r.covered).toBe(false);
+      expect(r.overlapsGuide).toBe(false);
+    });
+  }
+
   test('static start (?sweep=0) and manual Explicit toggle stay in View A and show the large N', async ({ page }) => {
     test.setTimeout(120_000);
     await page.goto('/?mode=explicit&sweep=0', { waitUntil: 'domcontentloaded' });

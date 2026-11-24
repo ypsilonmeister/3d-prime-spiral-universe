@@ -884,9 +884,11 @@ let sweepForcedView = false;
 setExplicitSweepPhaseCallback((phase) => {
     if (phase === 'start') {
         sweepForcedView = false;
-        if (launchedFromUrl && currentView() === 'a') {
+        if (launchedFromUrl) {
+            // Whatever view the (re)play starts in (e.g. View B left behind by an interrupted sweep),
+            // completion returns to View A.
             sweepForcedView = true;
-            explicitMode.setView('b', { auto: true });
+            if (currentView() === 'a') explicitMode.setView('b', { auto: true });
         }
     } else if (phase === 'complete') {
         const back = sweepForcedView && currentView() === 'b';

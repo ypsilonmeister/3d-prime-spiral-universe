@@ -551,7 +551,7 @@ button.active {
     top: 14px;
     left: 50%;
     transform: translateX(-50%);
-    z-index: 2;
+    z-index: 3; /* above the guide card (z 2): the read-out must never be covered */
     display: flex;
     align-items: baseline;
     gap: 10px;
@@ -581,6 +581,36 @@ button.active {
     line-height: 1;
     min-width: 4ch;
     text-align: right;
+}
+
+/* Medium widths: the centred read-out would run under the left control panel (244px) or the open guide
+   card (300px, right). Put it in the free column between them and shrink the digits to fit. */
+@media (min-width: 641px) and (max-width: 940px) {
+    .explicit-n-display {
+        left: 252px;
+        width: calc(100vw - 252px - 316px);
+        transform: none;
+        box-sizing: border-box;
+        flex-direction: column;
+        align-items: center;
+        gap: 0;
+        padding: 3px 6px 5px;
+    }
+    .explicit-n-display-label { font-size: 0.9rem; }
+    .explicit-n-display-val {
+        font-size: clamp(1.4rem, calc((100vw - 568px) * 0.3), 2.8rem);
+        min-width: 0;
+        text-align: center;
+    }
+}
+
+/* Short landscape: the guide card is 260px wide and 4px from the edge. */
+@media (min-width: 641px) and (max-width: 940px) and (orientation: landscape) and (max-height: 500px) {
+    .explicit-n-display {
+        top: 8px;
+        width: calc(100vw - 252px - 272px);
+    }
+    .explicit-n-display-val { font-size: clamp(1.6rem, calc((100vw - 520px) * 0.3), 2.8rem); }
 }
 
 .explicit-hud {

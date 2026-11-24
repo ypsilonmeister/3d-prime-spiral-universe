@@ -222,6 +222,10 @@ export function getSharedGlowTexture() {
 export function createParticleShaderMaterial({
     labelFarScale = 3.5,
     labelNearScale = 1.1,
+    labelFarMax = 0.0,
+    labelNearMax = 0.0,
+    maxPointSize = 0.0,
+    maxNonLabelPointSize = 0.0,
     minPrimeSize = 50.0,
     blending = THREE.AdditiveBlending,
     showLabels = state.showLabels,
@@ -229,23 +233,37 @@ export function createParticleShaderMaterial({
 } = {}) {
     return new THREE.ShaderMaterial({
         uniforms: {
-            atlas:          { value: getSharedNumberAtlas() },
-            starTex:        { value: getSharedGlowTexture() },
-            uShowLabels:    { value: showLabels ? 1.0 : 0.0 },
-            uViewHeight:    { value: viewHeight },
-            uLabelFarScale: { value: labelFarScale },
-            uLabelNearScale:{ value: labelNearScale },
-            uMinPrimeSize:  { value: minPrimeSize },
+            atlas:                 { value: getSharedNumberAtlas() },
+            starTex:               { value: getSharedGlowTexture() },
+            uShowLabels:           { value: showLabels ? 1.0 : 0.0 },
+            uViewHeight:           { value: viewHeight },
+            uLabelFarScale:        { value: labelFarScale },
+            uLabelNearScale:       { value: labelNearScale },
+            uLabelFarMax:          { value: labelFarMax },
+            uLabelNearMax:         { value: labelNearMax },
+            uMaxPointSize:         { value: maxPointSize },
+            uMaxNonLabelPointSize: { value: maxNonLabelPointSize },
+            uMinPrimeSize:         { value: minPrimeSize },
         },
         vertexShader: `
             attribute float size; attribute float number; attribute vec3 customColor;
             uniform float uViewHeight;
+            uniform float uMinPrimeSize;
+            uniform float uMaxPointSize;
+            uniform float uMaxNonLabelPointSize;
             varying vec3 vColor; varying float vNumber; varying float vDistance; varying float vSize;
             void main() {
                 vColor = customColor; vNumber = number; vSize = size;
                 vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
                 vDistance = -mvPosition.z;
-                gl_PointSize = max(size * (uViewHeight * 1.5 / vDistance), 0.0);
+                float ptSize = max(size * (uViewHeight * 1.5 / vDistance), 0.0);
+                float isLabelable = step(uMinPrimeSize, size);
+                if (isLabelable < 0.5 && uMaxNonLabelPointSize > 0.0) {
+                    ptSize = min(ptSize, uMaxNonLabelPointSize);
+                } else if (uMaxPointSize > 0.0) {
+                    ptSize = min(ptSize, uMaxPointSize);
+                }
+                gl_PointSize = ptSize;
                 gl_Position = projectionMatrix * mvPosition;
             }
         `,
@@ -253,15 +271,25 @@ export function createParticleShaderMaterial({
             precision highp float;
             uniform sampler2D atlas; uniform sampler2D starTex;
             uniform float uShowLabels; uniform float uViewHeight;
-            uniform float uLabelFarScale; uniform float uLabelNearScale; uniform float uMinPrimeSize;
+            uniform float uLabelFarScale; uniform float uLabelNearScale;
+            uniform float uLabelFarMax; uniform float uLabelNearMax;
+            uniform float uMaxPointSize; uniform float uMaxNonLabelPointSize;
+            uniform float uMinPrimeSize;
             varying vec3 vColor; varying float vNumber; varying float vDistance; varying float vSize;
             void main() {
                 float n = floor(vNumber + 0.5);
                 if (n < 0.5 || vSize < 0.1) discard;
                 float currentPointSize = max(vSize * (uViewHeight * 1.5 / vDistance), 0.0);
                 float isPrime = step(uMinPrimeSize, vSize);
+                if (isPrime < 0.5 && uMaxNonLabelPointSize > 0.0) {
+                    currentPointSize = min(currentPointSize, uMaxNonLabelPointSize);
+                } else if (uMaxPointSize > 0.0) {
+                    currentPointSize = min(currentPointSize, uMaxPointSize);
+                }
                 float labelFar  = uViewHeight * uLabelFarScale;
                 float labelNear = uViewHeight * uLabelNearScale;
+                if (uLabelFarMax > 0.0)  labelFar  = min(labelFar, uLabelFarMax);
+                if (uLabelNearMax > 0.0) labelNear = min(labelNear, uLabelNearMax);
                 float numMix = uShowLabels * isPrime * smoothstep(labelFar, labelNear, vDistance);
                 vec4 starColor = vec4(vColor * 1.5, 1.0) * texture2D(starTex, gl_PointCoord);
                 if (numMix > 0.01 && currentPointSize > 6.0) {

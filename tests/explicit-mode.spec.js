@@ -1487,26 +1487,51 @@ test.describe('explicit formula mode', () => {
     await enter(page);
     await waitExplicitReady(page, i => i.kind === 'psi1' && i.N != null);
 
-    // 1. Verify shader uniforms, shared textures, and exact prime `number` attribute values
+    // 1. Verify shader uniforms, shared textures, thinning invariants, and exact prime `number` attribute values
     const meta = await page.evaluate(() => {
       const s = window.__APP_STATE__;
       const primes = s.scene.getObjectByName('explicit-primes');
       const mainMat = s.points.material;
       const pMat = primes.material;
+      const pos = primes.geometry.attributes.position;
       const nums = primes.geometry.attributes.number;
       const sizes = primes.geometry.attributes.size;
       const cols = primes.geometry.attributes.customColor;
+      const minPrimeSize = pMat.uniforms.uMinPrimeSize.value;
 
       const targets = [2, 3, 5, 7, 11, 73, 7919, 104729, 319993];
       const targetSet = new Set(targets);
       const spotChecks = [];
+      const labeledIdx = [];
+      let sparseTotal = 0;
+      let sparseLabeled = 0;
       let idx = 0;
       for (let p = 2; p <= s.explicitInfo.xMax; p++) {
         if (!s.isPrimeArray[p]) continue;
+        const sz = sizes.getX(idx);
+        const isLabeled = sz >= minPrimeSize;
+        if (isLabeled) labeledIdx.push(idx);
+        if (p <= 139) {
+          sparseTotal++;
+          if (isLabeled) sparseLabeled++;
+        }
         if (targetSet.has(p)) {
-          spotChecks.push({ expected: p, actual: nums.getX(idx), size: sizes.getX(idx) });
+          spotChecks.push({ expected: p, actual: nums.getX(idx), size: sz, labeled: isLabeled });
         }
         idx++;
+      }
+      let minLabeledDist = Infinity;
+      for (let a = 0; a < labeledIdx.length; a++) {
+        const i = labeledIdx[a];
+        for (let b = a + 1; b < Math.min(a + 30, labeledIdx.length); b++) {
+          const j = labeledIdx[b];
+          const d = Math.hypot(
+            pos.getX(i) - pos.getX(j),
+            pos.getY(i) - pos.getY(j),
+            pos.getZ(i) - pos.getZ(j),
+          );
+          if (d < minLabeledDist) minLabeledDist = d;
+        }
       }
       return {
         isShaderMaterial: pMat.isShaderMaterial === true,
@@ -1516,9 +1541,21 @@ test.describe('explicit formula mode', () => {
         uViewHeight: pMat.uniforms.uViewHeight.value,
         uLabelFarScale: pMat.uniforms.uLabelFarScale.value,
         uLabelNearScale: pMat.uniforms.uLabelNearScale.value,
+        uLabelFarMax: pMat.uniforms.uLabelFarMax.value,
+        uLabelNearMax: pMat.uniforms.uLabelNearMax.value,
+        mainCaps: {
+          farMax: mainMat.uniforms.uLabelFarMax.value,
+          nearMax: mainMat.uniforms.uLabelNearMax.value,
+          maxPt: mainMat.uniforms.uMaxPointSize.value,
+          maxNonLabPt: mainMat.uniforms.uMaxNonLabelPointSize.value,
+        },
         numCount: nums.count,
         sizeCount: sizes.count,
         colCount: cols.count,
+        labeledCount: labeledIdx.length,
+        sparseTotal,
+        sparseLabeled,
+        minLabeledDist,
         spotChecks,
       };
     });
@@ -1529,17 +1566,93 @@ test.describe('explicit formula mode', () => {
     expect(meta.uShowLabels).toBe(1.0);
     expect(meta.uViewHeight).toBeGreaterThan(0);
     expect(meta.uLabelFarScale).toBeGreaterThan(meta.uLabelNearScale);
+    expect(meta.uLabelFarMax).toBeGreaterThan(meta.uLabelNearMax);
+    expect(meta.uLabelNearMax).toBeGreaterThan(0);
+    expect(meta.mainCaps).toEqual({ farMax: 0, nearMax: 0, maxPt: 0, maxNonLabPt: 0 });
     expect(meta.numCount).toBe(27608);
     expect(meta.sizeCount).toBe(27608);
     expect(meta.colCount).toBe(27608);
+    expect(meta.sparseTotal).toBe(34);
+    expect(meta.sparseLabeled).toBe(34);
+    expect(meta.labeledCount).toBeLessThan(27608);
+    expect(meta.minLabeledDist).toBeGreaterThanOrEqual(52.0);
     expect(meta.spotChecks).toHaveLength(9);
     for (const sc of meta.spotChecks) {
       expect(sc.actual).toBe(sc.expected);
       expect(sc.size).toBeGreaterThan(0);
+      expect(sc.labeled).toBe(true);
     }
 
-    // 2. Pixel diff check: far default view has 0 diff when toggling uShowLabels,
-    //    while close-up on p=2 has significant pixel diff (digit glyph vs star dot).
+    // 2. Pixel diff check: far default view has 0 diff at both 1280x880 and tall 1920x2880,
+    //    while close-ups on sparse (p=2) and dense (p=104729, p=319993) primes have clear digit diffs.
+    const origViewport = page.viewportSize() || { width: 1280, height: 720 };
+    const measureFarDiffAt = async (width, height) => {
+      await page.setViewportSize({ width, height });
+      await expect.poll(async () => page.evaluate(() => {
+        const s = window.__APP_STATE__;
+        const p = s.scene.getObjectByName('explicit-primes');
+        const gl = s.renderer.getContext();
+        return {
+          bufH: gl.drawingBufferHeight,
+          uViewHeight: p.material.uniforms.uViewHeight.value,
+        };
+      }), { timeout: 15_000 }).toEqual({ bufH: height, uViewHeight: height });
+
+      return page.evaluate(async () => {
+        const THREE = await import('three');
+        const s = window.__APP_STATE__;
+        const primes = s.scene.getObjectByName('explicit-primes');
+        const gl = s.renderer.getContext();
+        const w = gl.drawingBufferWidth;
+        const h = gl.drawingBufferHeight;
+
+        const prevAutoRotate = s.controls.autoRotate;
+        const prevCamPos = s.camera.position.clone();
+        const prevTarget = s.controls.target.clone();
+        s.controls.autoRotate = false;
+        s.camera.position.set(3000, 3000, 5000);
+        s.controls.target.set(0, 0, 0);
+        s.controls.update();
+        s.camera.updateMatrixWorld(true);
+
+        const grab = (showVal) => {
+          primes.material.uniforms.uShowLabels.value = showVal;
+          s.renderer.clear();
+          s.renderer.render(s.scene, s.camera);
+          const buf = new Uint8Array(w * h * 4);
+          gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+          return buf;
+        };
+        const onBuf = grab(1.0);
+        const offBuf = grab(0.0);
+        primes.material.uniforms.uShowLabels.value = s.showLabels ? 1.0 : 0.0;
+        let diff = 0;
+        for (let i = 0; i < onBuf.length; i += 4) {
+          if (onBuf[i] !== offBuf[i] || onBuf[i + 1] !== offBuf[i + 1] || onBuf[i + 2] !== offBuf[i + 2]) diff++;
+        }
+
+        s.camera.position.copy(prevCamPos);
+        s.controls.target.copy(prevTarget);
+        s.controls.autoRotate = prevAutoRotate;
+        s.controls.update();
+        return { w, h, diff, glError: gl.getError() };
+      });
+    };
+
+    const far880 = await measureFarDiffAt(1280, 880);
+    expect(far880.glError).toBe(0);
+    expect(far880.diff).toBe(0);
+
+    const far2880 = await measureFarDiffAt(1920, 2880);
+    expect(far2880.glError).toBe(0);
+    expect(far2880.diff).toBe(0);
+
+    await page.setViewportSize(origViewport);
+    await expect.poll(async () => page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      return s.scene.getObjectByName('explicit-primes').material.uniforms.uViewHeight.value;
+    }), { timeout: 15_000 }).toBe(origViewport.height);
+
     const renderDiffCheck = await page.evaluate(async () => {
       const { explicitAxisPoint } = await import('/app/modes/explicit.js');
       const s = window.__APP_STATE__;
@@ -1578,23 +1691,33 @@ test.describe('explicit formula mode', () => {
       };
 
       const THREE = await import('three');
-      const farDiff = diffForCamera(new THREE.Vector3(3000, 3000, 5000), new THREE.Vector3(0, 0, 0));
       const p2 = explicitAxisPoint(2, s.explicitInfo.xMax);
       const nearDiff = diffForCamera(
         new THREE.Vector3(p2.x + 200, p2.y + 150, p2.z + 100),
         new THREE.Vector3(p2.x, p2.y, p2.z),
+      );
+      const p104729 = explicitAxisPoint(104729, s.explicitInfo.xMax);
+      const near104729Diff = diffForCamera(
+        new THREE.Vector3(p104729.x, p104729.y + 1.2, p104729.z + 0.01),
+        new THREE.Vector3(p104729.x, p104729.y, p104729.z),
+      );
+      const p319993 = explicitAxisPoint(319993, s.explicitInfo.xMax);
+      const near319993Diff = diffForCamera(
+        new THREE.Vector3(p319993.x, p319993.y + 1.2, p319993.z + 0.01),
+        new THREE.Vector3(p319993.x, p319993.y, p319993.z),
       );
 
       s.camera.position.copy(prevCamPos);
       s.controls.target.copy(prevTarget);
       s.controls.autoRotate = prevAutoRotate;
       s.controls.update();
-      return { farDiff, nearDiff, glError: gl.getError() };
+      return { nearDiff, near104729Diff, near319993Diff, glError: gl.getError() };
     });
 
     expect(renderDiffCheck.glError).toBe(0);
-    expect(renderDiffCheck.farDiff).toBe(0);
     expect(renderDiffCheck.nearDiff).toBeGreaterThan(200);
+    expect(renderDiffCheck.near104729Diff).toBeGreaterThan(200);
+    expect(renderDiffCheck.near319993Diff).toBeGreaterThan(200);
 
     // 3. Labels toggle (#sw-labels) syncs uShowLabels without affecting explicitShowPrimes
     await page.locator('#sw-labels').evaluate(el => el.parentElement.click());

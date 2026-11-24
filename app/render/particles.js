@@ -206,29 +206,36 @@ export function updateParticleVisuals() {
     state.geometry.attributes.size.needsUpdate = true;
 }
 
-export function createParticles() {
-    state.geometry = new THREE.BufferGeometry();
-    const pos = new Float32Array(state.MAX_POINTS * 3);
-    const nums = new Float32Array(state.MAX_POINTS);
-    for (let n = 1; n <= state.MAX_POINTS; n++) {
-        nums[n-1] = n;
-        pos[(n-1)*3]   = (Math.random()-0.5)*5000;
-        pos[(n-1)*3+1] = (Math.random()-0.5)*5000;
-        pos[(n-1)*3+2] = (Math.random()-0.5)*5000;
-    }
-    state.geometry.setAttribute('position',    new THREE.BufferAttribute(pos, 3));
-    state.geometry.setAttribute('number',      new THREE.BufferAttribute(nums, 1));
-    state.geometry.setAttribute('customColor', new THREE.BufferAttribute(new Float32Array(state.MAX_POINTS*3), 3));
-    state.geometry.setAttribute('size',        new THREE.BufferAttribute(new Float32Array(state.MAX_POINTS), 1));
-    
-    updateParticleVisuals();
+let sharedNumberAtlas = null;
+let sharedGlowTexture = null;
 
-    const material = new THREE.ShaderMaterial({
+export function getSharedNumberAtlas() {
+    if (!sharedNumberAtlas) sharedNumberAtlas = createNumberAtlas();
+    return sharedNumberAtlas;
+}
+
+export function getSharedGlowTexture() {
+    if (!sharedGlowTexture) sharedGlowTexture = createGlowTexture();
+    return sharedGlowTexture;
+}
+
+export function createParticleShaderMaterial({
+    labelFarScale = 3.5,
+    labelNearScale = 1.1,
+    minPrimeSize = 50.0,
+    blending = THREE.AdditiveBlending,
+    showLabels = state.showLabels,
+    viewHeight = typeof window !== 'undefined' ? window.innerHeight : 720,
+} = {}) {
+    return new THREE.ShaderMaterial({
         uniforms: {
-            atlas:       { value: createNumberAtlas() },
-            starTex:     { value: createGlowTexture() },
-            uShowLabels: { value: 1.0 },
-            uViewHeight: { value: window.innerHeight }
+            atlas:          { value: getSharedNumberAtlas() },
+            starTex:        { value: getSharedGlowTexture() },
+            uShowLabels:    { value: showLabels ? 1.0 : 0.0 },
+            uViewHeight:    { value: viewHeight },
+            uLabelFarScale: { value: labelFarScale },
+            uLabelNearScale:{ value: labelNearScale },
+            uMinPrimeSize:  { value: minPrimeSize },
         },
         vertexShader: `
             attribute float size; attribute float number; attribute vec3 customColor;
@@ -244,15 +251,17 @@ export function createParticles() {
         `,
         fragmentShader: `
             precision highp float;
-            uniform sampler2D atlas; uniform sampler2D starTex; uniform float uShowLabels; uniform float uViewHeight;
+            uniform sampler2D atlas; uniform sampler2D starTex;
+            uniform float uShowLabels; uniform float uViewHeight;
+            uniform float uLabelFarScale; uniform float uLabelNearScale; uniform float uMinPrimeSize;
             varying vec3 vColor; varying float vNumber; varying float vDistance; varying float vSize;
             void main() {
                 float n = floor(vNumber + 0.5);
                 if (n < 0.5 || vSize < 0.1) discard;
                 float currentPointSize = max(vSize * (uViewHeight * 1.5 / vDistance), 0.0);
-                float isPrime = step(50.0, vSize);
-                float labelFar  = uViewHeight * 3.5;
-                float labelNear = uViewHeight * 1.1;
+                float isPrime = step(uMinPrimeSize, vSize);
+                float labelFar  = uViewHeight * uLabelFarScale;
+                float labelNear = uViewHeight * uLabelNearScale;
                 float numMix = uShowLabels * isPrime * smoothstep(labelFar, labelNear, vDistance);
                 vec4 starColor = vec4(vColor * 1.5, 1.0) * texture2D(starTex, gl_PointCoord);
                 if (numMix > 0.01 && currentPointSize > 6.0) {
@@ -281,9 +290,29 @@ export function createParticles() {
                 if (gl_FragColor.a < 0.01) discard;
             }
         `,
-        blending: THREE.AdditiveBlending,
+        blending,
         transparent: true, depthWrite: false, depthTest: true
     });
+}
+
+export function createParticles() {
+    state.geometry = new THREE.BufferGeometry();
+    const pos = new Float32Array(state.MAX_POINTS * 3);
+    const nums = new Float32Array(state.MAX_POINTS);
+    for (let n = 1; n <= state.MAX_POINTS; n++) {
+        nums[n-1] = n;
+        pos[(n-1)*3]   = (Math.random()-0.5)*5000;
+        pos[(n-1)*3+1] = (Math.random()-0.5)*5000;
+        pos[(n-1)*3+2] = (Math.random()-0.5)*5000;
+    }
+    state.geometry.setAttribute('position',    new THREE.BufferAttribute(pos, 3));
+    state.geometry.setAttribute('number',      new THREE.BufferAttribute(nums, 1));
+    state.geometry.setAttribute('customColor', new THREE.BufferAttribute(new Float32Array(state.MAX_POINTS*3), 3));
+    state.geometry.setAttribute('size',        new THREE.BufferAttribute(new Float32Array(state.MAX_POINTS), 1));
+    
+    updateParticleVisuals();
+
+    const material = createParticleShaderMaterial();
     
     state.points = new THREE.Points(state.geometry, material);
     state.scene.add(state.points);

@@ -1478,4 +1478,167 @@ test.describe('explicit formula mode', () => {
     });
     expect(errors).toEqual([]);
   });
+
+  // ---- Issue #29: prime marker distance-faded digit labels ----------------
+
+  test('Issue #29: prime markers reuse main digit-atlas shader, show exact prime numbers up close, stay label-free afar, and follow labels toggle', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await boot(page);
+    await enter(page);
+    await waitExplicitReady(page, i => i.kind === 'psi1' && i.N != null);
+
+    // 1. Verify shader uniforms, shared textures, and exact prime `number` attribute values
+    const meta = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const primes = s.scene.getObjectByName('explicit-primes');
+      const mainMat = s.points.material;
+      const pMat = primes.material;
+      const nums = primes.geometry.attributes.number;
+      const sizes = primes.geometry.attributes.size;
+      const cols = primes.geometry.attributes.customColor;
+
+      const targets = [2, 3, 5, 7, 11, 73, 7919, 104729, 319993];
+      const targetSet = new Set(targets);
+      const spotChecks = [];
+      let idx = 0;
+      for (let p = 2; p <= s.explicitInfo.xMax; p++) {
+        if (!s.isPrimeArray[p]) continue;
+        if (targetSet.has(p)) {
+          spotChecks.push({ expected: p, actual: nums.getX(idx), size: sizes.getX(idx) });
+        }
+        idx++;
+      }
+      return {
+        isShaderMaterial: pMat.isShaderMaterial === true,
+        sharesAtlas: pMat.uniforms.atlas.value === mainMat.uniforms.atlas.value,
+        sharesStarTex: pMat.uniforms.starTex.value === mainMat.uniforms.starTex.value,
+        uShowLabels: pMat.uniforms.uShowLabels.value,
+        uViewHeight: pMat.uniforms.uViewHeight.value,
+        uLabelFarScale: pMat.uniforms.uLabelFarScale.value,
+        uLabelNearScale: pMat.uniforms.uLabelNearScale.value,
+        numCount: nums.count,
+        sizeCount: sizes.count,
+        colCount: cols.count,
+        spotChecks,
+      };
+    });
+
+    expect(meta.isShaderMaterial).toBe(true);
+    expect(meta.sharesAtlas).toBe(true);
+    expect(meta.sharesStarTex).toBe(true);
+    expect(meta.uShowLabels).toBe(1.0);
+    expect(meta.uViewHeight).toBeGreaterThan(0);
+    expect(meta.uLabelFarScale).toBeGreaterThan(meta.uLabelNearScale);
+    expect(meta.numCount).toBe(27608);
+    expect(meta.sizeCount).toBe(27608);
+    expect(meta.colCount).toBe(27608);
+    expect(meta.spotChecks).toHaveLength(9);
+    for (const sc of meta.spotChecks) {
+      expect(sc.actual).toBe(sc.expected);
+      expect(sc.size).toBeGreaterThan(0);
+    }
+
+    // 2. Pixel diff check: far default view has 0 diff when toggling uShowLabels,
+    //    while close-up on p=2 has significant pixel diff (digit glyph vs star dot).
+    const renderDiffCheck = await page.evaluate(async () => {
+      const { explicitAxisPoint } = await import('/app/modes/explicit.js');
+      const s = window.__APP_STATE__;
+      const primes = s.scene.getObjectByName('explicit-primes');
+      const gl = s.renderer.getContext();
+      const w = gl.drawingBufferWidth;
+      const h = gl.drawingBufferHeight;
+
+      const prevAutoRotate = s.controls.autoRotate;
+      const prevCamPos = s.camera.position.clone();
+      const prevTarget = s.controls.target.clone();
+      s.controls.autoRotate = false;
+
+      const diffForCamera = (camPos, target) => {
+        s.camera.position.copy(camPos);
+        s.controls.target.copy(target);
+        s.controls.update();
+        s.camera.updateMatrixWorld(true);
+
+        const grab = (showVal) => {
+          primes.material.uniforms.uShowLabels.value = showVal;
+          s.renderer.clear();
+          s.renderer.render(s.scene, s.camera);
+          const buf = new Uint8Array(w * h * 4);
+          gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+          return buf;
+        };
+        const onBuf = grab(1.0);
+        const offBuf = grab(0.0);
+        primes.material.uniforms.uShowLabels.value = s.showLabels ? 1.0 : 0.0;
+        let diff = 0;
+        for (let i = 0; i < onBuf.length; i += 4) {
+          if (onBuf[i] !== offBuf[i] || onBuf[i + 1] !== offBuf[i + 1] || onBuf[i + 2] !== offBuf[i + 2]) diff++;
+        }
+        return diff;
+      };
+
+      const THREE = await import('three');
+      const farDiff = diffForCamera(new THREE.Vector3(3000, 3000, 5000), new THREE.Vector3(0, 0, 0));
+      const p2 = explicitAxisPoint(2, s.explicitInfo.xMax);
+      const nearDiff = diffForCamera(
+        new THREE.Vector3(p2.x + 200, p2.y + 150, p2.z + 100),
+        new THREE.Vector3(p2.x, p2.y, p2.z),
+      );
+
+      s.camera.position.copy(prevCamPos);
+      s.controls.target.copy(prevTarget);
+      s.controls.autoRotate = prevAutoRotate;
+      s.controls.update();
+      return { farDiff, nearDiff, glError: gl.getError() };
+    });
+
+    expect(renderDiffCheck.glError).toBe(0);
+    expect(renderDiffCheck.farDiff).toBe(0);
+    expect(renderDiffCheck.nearDiff).toBeGreaterThan(200);
+
+    // 3. Labels toggle (#sw-labels) syncs uShowLabels without affecting explicitShowPrimes
+    await page.locator('#sw-labels').evaluate(el => el.parentElement.click());
+    await expect(page.locator('#sw-labels')).not.toHaveClass(/on/);
+    const afterOff = await page.evaluate(() => {
+      const s = window.__APP_STATE__;
+      const p = s.scene.getObjectByName('explicit-primes');
+      return {
+        showLabels: s.showLabels,
+        explicitShowPrimes: s.explicitShowPrimes,
+        primesVisible: p.visible,
+        uShowLabels: p.material.uniforms.uShowLabels.value,
+      };
+    });
+    expect(afterOff).toEqual({
+      showLabels: false,
+      explicitShowPrimes: true,
+      primesVisible: true,
+      uShowLabels: 0.0,
+    });
+
+    // Toggling prime markers off/on does not alter showLabels
+    await page.locator('#explicit-primes-toggle').click();
+    expect(await page.evaluate(() => ({
+      showLabels: window.__APP_STATE__.showLabels,
+      primesVisible: window.__APP_STATE__.scene.getObjectByName('explicit-primes').visible,
+    }))).toEqual({ showLabels: false, primesVisible: false });
+    await page.locator('#explicit-primes-toggle').click();
+
+    // Re-entering Explicit Mode while showLabels is false initializes uShowLabels = 0.0
+    await enter(page); // exit
+    await enter(page); // re-enter with showLabels === false
+    await waitExplicitReady(page, i => i.N != null);
+    expect(await page.evaluate(() =>
+      window.__APP_STATE__.scene.getObjectByName('explicit-primes').material.uniforms.uShowLabels.value
+    )).toBe(0.0);
+
+    // Restore labels ON
+    await page.locator('#sw-labels').evaluate(el => el.parentElement.click());
+    await expect(page.locator('#sw-labels')).toHaveClass(/on/);
+    expect(await page.evaluate(() =>
+      window.__APP_STATE__.scene.getObjectByName('explicit-primes').material.uniforms.uShowLabels.value
+    )).toBe(1.0);
+
+    expect(errors).toEqual([]);
+  });
 });

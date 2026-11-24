@@ -12,6 +12,39 @@ function listJs(dir) {
   });
 }
 
+// Scan getElement(...) calls with a small scanner instead of a regex so that whitespace/newlines
+// around the parenthesis or argument, and '...', "..." or `...` quoting, do not change the result.
+// Returns { literals: string[], dynamic: string[] }.
+function scanGetElementCalls(src) {
+  const literals = [];
+  const dynamic = [];
+  const re = /\bgetElement\s*\(/g;
+  let m;
+  while ((m = re.exec(src))) {
+    if (/\bfunction\s*\*?\s*$/.test(src.slice(0, m.index))) continue; // the definition itself
+    let i = re.lastIndex;
+    while (/\s/.test(src[i] ?? '')) i++;
+    const q = src[i];
+    if (q === "'" || q === '"' || q === '`') {
+      let j = i + 1;
+      let id = '';
+      let plain = true;
+      while (j < src.length && src[j] !== q) {
+        if (src[j] === '\\') { plain = false; j += 2; continue; }
+        if (q === '`' && src[j] === '$' && src[j + 1] === '{') { plain = false; break; }
+        id += src[j++];
+      }
+      if (plain && src[j] === q) {
+        let k = j + 1;
+        while (/\s/.test(src[k] ?? '')) k++;
+        if (src[k] === ')' || src[k] === ',') { literals.push(id); continue; }
+      }
+    }
+    dynamic.push(src.slice(i, i + 40).split('\n')[0]);
+  }
+  return { literals, dynamic };
+}
+
 async function waitForReady(page) {
   await expect.poll(
     async () => page.locator('#boot-stage').textContent(),
@@ -24,16 +57,15 @@ test.describe('element registry (Issue #33)', () => {
   test('every getElement() ID used in app/ is registered in initElements and exists in index.html', () => {
     const panels = readFileSync(join(root, 'app/ui/panels.js'), 'utf8');
     const block = panels.match(/const ids = \[([\s\S]*?)\];/)[1];
-    const registered = new Set([...block.matchAll(/'([^']+)'/g)].map((m) => m[1]));
+    const registered = new Set([...block.matchAll(/(['"`])([^'"`]+)\1/g)].map((m) => m[2]));
 
     const used = new Set();
     for (const f of listJs(join(root, 'app'))) {
       const src = readFileSync(f, 'utf8');
-      for (const m of src.matchAll(/getElement\(\s*['"]([^'"]+)['"]\s*\)/g)) used.add(m[1]);
+      const { literals, dynamic } = scanGetElementCalls(src);
+      literals.forEach((id) => used.add(id));
       // dynamic IDs cannot be checked statically; fail loudly instead of skipping silently
-      for (const m of src.matchAll(/getElement\(\s*(?!['"])([^)]+)\)/g)) {
-        if (!f.endsWith('panels.js')) throw new Error(`Dynamic getElement(${m[1]}) in ${f}: use a literal ID`);
-      }
+      if (dynamic.length) throw new Error(`Dynamic getElement(${dynamic[0]}) in ${f}: use a literal ID`);
     }
     expect(used.size).toBeGreaterThan(60);
 

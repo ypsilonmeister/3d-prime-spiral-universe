@@ -613,6 +613,28 @@ button.active {
     .explicit-n-display-val { font-size: clamp(1.6rem, calc((100vw - 520px) * 0.3), 2.8rem); }
 }
 
+/* Narrow short landscape (<=640px wide): the guide card sits at the left edge (x 8..268), so the centred
+   read-out would cover it. Put the read-out in the free column to its right. */
+@media (max-width: 640px) and (orientation: landscape) and (max-height: 500px) {
+    .explicit-n-display {
+        top: 8px;
+        left: 276px;
+        width: calc(100vw - 276px - 8px);
+        transform: none;
+        box-sizing: border-box;
+        flex-direction: column;
+        align-items: center;
+        gap: 0;
+        padding: 3px 6px 5px;
+    }
+    .explicit-n-display-label { font-size: 0.9rem; }
+    .explicit-n-display-val {
+        font-size: clamp(1.4rem, 7vw, 2.8rem);
+        min-width: 0;
+        text-align: center;
+    }
+}
+
 .explicit-hud {
     margin-top: 8px;
     padding-top: 6px;

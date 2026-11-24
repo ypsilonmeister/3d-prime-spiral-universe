@@ -656,7 +656,7 @@ test.describe('Explicit Formula Mode N-sweep animation (PR 2)', () => {
     await expect(page.locator('#explicit-n-display-val')).toHaveText('1000');
   });
 
-  for (const [w, h] of [[700, 768], [667, 375], [390, 844], [1280, 720]]) {
+  for (const [w, h] of [[700, 768], [667, 375], [600, 375], [390, 844], [1280, 720]]) {
     test(`large N read-out is fully visible with the guide expanded at ${w}x${h}`, async ({ page }) => {
       test.setTimeout(120_000);
       await page.setViewportSize({ width: w, height: h });

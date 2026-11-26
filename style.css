@@ -915,6 +915,17 @@ button.active {
     color: rgba(224, 232, 245, 0.88);
 }
 
+.rh-block-body a {
+    color: #66f7ff;
+    text-underline-offset: 2px;
+    overflow-wrap: anywhere;
+}
+
+.rh-block-body a:focus-visible {
+    outline: 2px solid #00f2ff;
+    outline-offset: 2px;
+}
+
 .rh-swatch {
     flex-shrink: 0;
     display: inline-block;

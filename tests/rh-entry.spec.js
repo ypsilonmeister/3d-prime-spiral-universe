@@ -894,6 +894,32 @@ test.describe('RH 3-block explanation panel (PR 3)', () => {
     await expect(page.locator('#rh-block-bound')).toContainText('±B₁(x)');
     await expect(page.locator('#rh-block-bound')).toContainText('面ではなく紫の輪郭線');
     await expect(page.locator('#rh-block-bound')).toContainText('リーマン予想の証明ではありません');
+    const noteLink = page.locator('#rh-block-bound-body a');
+    const expectBoundNote = async () => {
+      const body = page.locator('#rh-block-bound-body');
+      await expect(body).toContainText('2026年11月');
+      await expect(body).toContainText('リーマン予想の証明を主張する Lean 形式化');
+      await expect(body).toContainText('「仮定」としての表記を維持します。');
+      await expect(body).not.toContainText(/証明済み|証明され(た|まし)/);
+      await expect(noteLink).toBeVisible();
+      await expect(noteLink).toHaveText('https://math.mit.edu/~drew/grh/');
+      await expect(noteLink).toHaveAttribute('href', 'https://math.mit.edu/~drew/grh/');
+      await expect(noteLink).toHaveAttribute('target', '_blank');
+      await expect(noteLink).toHaveAttribute('rel', 'noopener noreferrer');
+    };
+    await expectBoundNote();
+    // The static markup in index.html and the string rendered by explicit.js must match
+    const wording = await page.evaluate(async () => {
+      const html = await (await fetch('/index.html')).text();
+      const source = new DOMParser().parseFromString(html, 'text/html').getElementById('rh-block-bound-body');
+      const live = document.getElementById('rh-block-bound-body');
+      // Drop the static node's text so that the next render has to rebuild it from the JS string
+      live.textContent = '';
+      document.getElementById('explicit-view-b').click();
+      document.getElementById('explicit-view-a').click();
+      return { staticHtml: source.innerHTML, renderedHtml: live.innerHTML };
+    });
+    expect(wording.renderedHtml).toBe(wording.staticHtml);
 
     // Wording constraint & no duplication of left-panel HUD / scale note / legend explanations
     const cardText = await card.textContent();
@@ -939,6 +965,7 @@ test.describe('RH 3-block explanation panel (PR 3)', () => {
     await expect(page.locator('#rh-block-measured-title')).toContainText('ビュー B では非表示');
     await expect(page.locator('#rh-block-bound-title')).toContainText('ビュー B では非表示');
     await expect(page.locator('#rh-block-recon-title')).toContainText('ビュー B：打ち切り残差');
+    await expectBoundNote();
     const viewBReconText = await page.locator('#rh-block-recon-body').textContent();
     expect(viewBReconText).toContain('N が大きいほど傾向として');
     expect(viewBReconText).toContain('N を 1 つ増やすごとに必ず小さくなるとは限らず');
@@ -952,6 +979,15 @@ test.describe('RH 3-block explanation panel (PR 3)', () => {
     await expect(page.locator('#rh-block-measured')).not.toHaveClass(/rh-block-muted/);
     await expect(page.locator('#rh-block-bound')).not.toHaveClass(/rh-block-muted/);
     await expect(page.locator('#rh-block-recon-body')).toContainText('残差 rung');
+    await expectBoundNote();
+
+    // Re-rendering with unchanged wording keeps the same link node, so focus is not lost
+    await noteLink.focus();
+    await page.evaluate(() => { document.getElementById('explicit-view-b').click(); });
+    await expect(page.locator('#rh-block-bound')).toHaveClass(/rh-block-muted/);
+    await expect(noteLink).toBeFocused();
+    await page.evaluate(() => { document.getElementById('explicit-view-a').click(); });
+    await expect(noteLink).toBeFocused();
 
     // Collapse to chip "解説を開く" and re-expand
     await collapseBtn.click();

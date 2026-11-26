@@ -240,6 +240,8 @@ function setSegButton(id, active) {
     el.setAttribute('aria-pressed', active ? 'true' : 'false');
 }
 
+const RH_VERIFICATION_URL = 'https://math.mit.edu/~drew/grh/';
+
 function syncRhGuidePanel(kind, view) {
     if (typeof document === 'undefined') return;
     const isPsi = kind === 'psi';
@@ -285,8 +287,19 @@ function syncRhGuidePanel(kind, view) {
     }
     const boundBody = document.getElementById('rh-block-bound-body');
     if (boundBody) {
-        boundBody.textContent =
-            `もしリーマン予想（RH）が正しいと仮定した場合に成り立つ理論上の誤差上限（Schoenfeld の上限、x ≥ 73.2）を、面ではなく紫の輪郭線（上下の境界線と等間隔リングの殻）で示しています。実測がこの輪郭の内側にあるのは表示範囲（x ≤ ${xMaxStr}）での観測であり、リーマン予想の証明ではありません。`;
+        // 文面は index.html の #rh-block-bound-body と一致させる
+        const beforeLink =
+            `もしリーマン予想（RH）が正しいと仮定した場合に成り立つ理論上の誤差上限（Schoenfeld の上限、x ≥ 73.2）を、面ではなく紫の輪郭線（上下の境界線と等間隔リングの殻）で示しています。実測がこの輪郭の内側にあるのは表示範囲（x ≤ ${xMaxStr}）での観測であり、リーマン予想の証明ではありません。なお、2026年11月に、リーマン予想の証明を主張する Lean 形式化が機械検証（カーネルによる再生確認と比較ツールによる照合）を通過したと報告されています（検証状況: `;
+        const afterLink = '）。ただし、証明の内容に対する数学コミュニティの精査は続いているため、このページでは従来どおり「仮定」としての表記を維持します。';
+        // 同じ文面なら差し替えない（スイープ中の再描画でリンクのフォーカスやクリックが失われないように）
+        if (boundBody.textContent !== beforeLink + RH_VERIFICATION_URL + afterLink) {
+            const link = document.createElement('a');
+            link.href = RH_VERIFICATION_URL;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = RH_VERIFICATION_URL;
+            boundBody.replaceChildren(beforeLink, link, afterLink);
+        }
     }
 }
 
